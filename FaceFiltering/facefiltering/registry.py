@@ -43,113 +43,111 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
 FILTER_NAMES: List[str] = [n for n, _ in _FILTER_ORDER]
 _REGISTRY: Dict[str, Callable[..., np.ndarray]] = dict(_FILTER_ORDER)
 
-# Categories for UI grouping / classification
-FILTER_CATEGORIES: Dict[str, str] = {
+# Methodology = how the filter is computed.
+FILTER_METHODOLOGIES: Dict[str, str] = {
+    f_sobel.DISPLAY_NAME: "Spatial neighborhood",
+    f_lap.DISPLAY_NAME: "Spatial neighborhood",
+    f_canny.DISPLAY_NAME: "Spatial neighborhood",
+    f_unsharp.DISPLAY_NAME: "Spatial neighborhood",
+    f_gauss.DISPLAY_NAME: "Spatial neighborhood",
+    f_median.DISPLAY_NAME: "Spatial neighborhood",
+    f_bin.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_gamma.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_hist.DISPLAY_NAME: "Global histogram remapping",
+    f_hp.DISPLAY_NAME: "Frequency-domain (Fourier)",
+    f_wiener.DISPLAY_NAME: "Frequency-domain (Fourier)",
+    f_dilate.DISPLAY_NAME: "Morphological (structuring element)",
+    f_erode.DISPLAY_NAME: "Morphological (structuring element)",
+}
+
+METHODOLOGY_DESCRIPTIONS: Dict[str, str] = {
+    "All": "show all filters",
+    "Spatial neighborhood": "operate on local pixel neighborhoods (kernels/windows)",
+    "Point-wise intensity mapping": "map each pixel independently with a math transform",
+    "Global histogram remapping": "remap intensities using image-wide histogram statistics",
+    "Frequency-domain (Fourier)": "process spectral components after Fourier transform",
+    "Morphological (structuring element)": "shape-based max/min operations with structuring elements",
+}
+
+METHODOLOGY_NAMES: List[str] = [
+    "All",
+    "Spatial neighborhood",
+    "Point-wise intensity mapping",
+    "Global histogram remapping",
+    "Frequency-domain (Fourier)",
+    "Morphological (structuring element)",
+]
+
+FILTERS_BY_METHODOLOGY: Dict[str, List[str]] = {
+    m: [name for name in FILTER_NAMES if FILTER_METHODOLOGIES.get(name) == m] for m in METHODOLOGY_NAMES
+}
+FILTERS_BY_METHODOLOGY["All"] = FILTER_NAMES[:]
+
+# Function = what the filter is used for / output effect.
+FILTER_FUNCTIONS: Dict[str, str] = {
     f_sobel.DISPLAY_NAME: "Edge detection",
     f_lap.DISPLAY_NAME: "Edge detection",
     f_canny.DISPLAY_NAME: "Edge detection",
-    f_unsharp.DISPLAY_NAME: "Sharpening / enhancement",
+    f_unsharp.DISPLAY_NAME: "Sharpening / detail enhancement",
     f_gauss.DISPLAY_NAME: "Smoothing / denoising",
     f_median.DISPLAY_NAME: "Smoothing / denoising",
-    f_bin.DISPLAY_NAME: "Intensity transforms",
-    f_gamma.DISPLAY_NAME: "Intensity transforms",
-    f_hist.DISPLAY_NAME: "Intensity transforms",
-    f_hp.DISPLAY_NAME: "Frequency-domain filtering",
-    f_wiener.DISPLAY_NAME: "Frequency-domain filtering",
-    f_dilate.DISPLAY_NAME: "Morphology",
-    f_erode.DISPLAY_NAME: "Morphology",
+    f_bin.DISPLAY_NAME: "Segmentation / masking",
+    f_gamma.DISPLAY_NAME: "Tone / brightness adjustment",
+    f_hist.DISPLAY_NAME: "Contrast enhancement",
+    f_hp.DISPLAY_NAME: "Sharpening / detail enhancement",
+    f_wiener.DISPLAY_NAME: "Deblurring / restoration",
+    f_dilate.DISPLAY_NAME: "Shape / region refinement",
+    f_erode.DISPLAY_NAME: "Shape / region refinement",
 }
 
-CATEGORY_NAMES: List[str] = [
+FUNCTION_NAMES: List[str] = [
     "Edge detection",
-    "Sharpening / enhancement",
+    "Sharpening / detail enhancement",
     "Smoothing / denoising",
-    "Intensity transforms",
-    "Frequency-domain filtering",
-    "Morphology",
+    "Segmentation / masking",
+    "Tone / brightness adjustment",
+    "Contrast enhancement",
+    "Deblurring / restoration",
+    "Shape / region refinement",
 ]
 
-FILTERS_BY_CATEGORY: Dict[str, List[str]] = {
-    cat: [name for name in FILTER_NAMES if FILTER_CATEGORIES.get(name) == cat] for cat in CATEGORY_NAMES
+FILTERS_BY_FUNCTION: Dict[str, List[str]] = {
+    fn: [name for name in FILTER_NAMES if FILTER_FUNCTIONS.get(name) == fn] for fn in FUNCTION_NAMES
 }
 
-# Higher-level classification (as requested for the project UI)
-FILTER_TYPES: Dict[str, str] = {
-    # Feature / edge detection
-    f_sobel.DISPLAY_NAME: "Feature",
-    f_lap.DISPLAY_NAME: "Feature",
-    f_canny.DISPLAY_NAME: "Feature",
-    # Spatial domain filtering (direct pixel neighborhood operations)
-    f_gauss.DISPLAY_NAME: "Spatial",
-    f_median.DISPLAY_NAME: "Spatial",
-    f_unsharp.DISPLAY_NAME: "Spatial",
-    # Intensity transforms (pixel-by-pixel math)
-    f_bin.DISPLAY_NAME: "Intensity",
-    f_gamma.DISPLAY_NAME: "Intensity",
-    # Color adjustments
-    f_hist.DISPLAY_NAME: "Color",
-    # Frequency-domain filtering
-    f_hp.DISPLAY_NAME: "Frequency",
-    # Morphological (shape manipulation)
-    f_dilate.DISPLAY_NAME: "Morphological",
-    f_erode.DISPLAY_NAME: "Morphological",
-    # Restoration / deblurring
-    f_wiener.DISPLAY_NAME: "Restoration",
-}
-
-TYPE_DESCRIPTIONS: Dict[str, str] = {
-    "All": "show all filters",
-    "Spatial": "direct pixel editing (neighborhood operations)",
-    "Frequency": "edit via signal components (Fourier domain)",
-    "Intensity": "pixel-by-pixel math (point transforms)",
-    "Morphological": "shape manipulation (structuring elements)",
-    "Color": "color / luminance adjustments",
-    "Feature": "detect edges/details",
-    "Restoration": "fix damaged/blurred images (deconvolution)",
-    "Convolution": "linear filtering via convolution kernels",
-}
-
-TYPE_NAMES: List[str] = [
-    "All",
-    "Convolution",
-    "Spatial",
-    "Frequency",
-    "Intensity",
-    "Morphological",
-    "Color",
-    "Feature",
-    "Restoration",
-]
-
-FILTERS_BY_TYPE: Dict[str, List[str]] = {
-    t: [name for name in FILTER_NAMES if FILTER_TYPES.get(name) == t] for t in TYPE_NAMES
-}
-
-# Convolution capture (cross-cutting): filters that are (or are built from) linear convolution.
+# Cross-cutting tag: linear convolution-based filters.
 CONVOLUTION_FILTERS: List[str] = [
     f_sobel.DISPLAY_NAME,
     f_lap.DISPLAY_NAME,
     f_gauss.DISPLAY_NAME,
     f_unsharp.DISPLAY_NAME,
-    f_hp.DISPLAY_NAME,  # implemented in Fourier domain, but equivalent to convolution in space
+    f_hp.DISPLAY_NAME,  # Fourier implementation but equivalent to convolution in space.
 ]
-FILTERS_BY_TYPE["Convolution"] = [n for n in FILTER_NAMES if n in set(CONVOLUTION_FILTERS)]
-FILTERS_BY_TYPE["All"] = FILTER_NAMES[:]
 
-def categories_for_type(t: str) -> List[str]:
-    """Return the set of existing categories that appear under a type."""
-    if t == "All":
-        return ["All"] + CATEGORY_NAMES
-    names = FILTERS_BY_TYPE.get(t, FILTER_NAMES)
-    cats = {FILTER_CATEGORIES.get(n, "Other") for n in names}
-    # keep stable ordering based on CATEGORY_NAMES
-    return ["All"] + ([c for c in CATEGORY_NAMES if c in cats] or CATEGORY_NAMES)
+def functions_for_methodology(methodology: str) -> List[str]:
+    """Return the available function groups under a selected methodology."""
+    if methodology == "All":
+        return ["All"] + FUNCTION_NAMES
+    names = FILTERS_BY_METHODOLOGY.get(methodology, FILTER_NAMES)
+    funcs = {FILTER_FUNCTIONS.get(n, "Other") for n in names}
+    return ["All"] + ([f for f in FUNCTION_NAMES if f in funcs] or FUNCTION_NAMES)
 
-def filters_for_type_and_category(t: str, c: str) -> List[str]:
-    names = FILTERS_BY_TYPE.get(t, FILTER_NAMES) if t != "All" else FILTER_NAMES
-    if c == "All":
+def filters_for_methodology_and_function(methodology: str, function: str) -> List[str]:
+    names = FILTERS_BY_METHODOLOGY.get(methodology, FILTER_NAMES) if methodology != "All" else FILTER_NAMES
+    if function == "All":
         return names
-    return [n for n in names if FILTER_CATEGORIES.get(n) == c] or names
+    return [n for n in names if FILTER_FUNCTIONS.get(n) == function] or names
+
+# Backwards-compatible aliases used by older imports/UI names.
+FILTER_TYPES = FILTER_METHODOLOGIES
+TYPE_DESCRIPTIONS = METHODOLOGY_DESCRIPTIONS
+TYPE_NAMES = METHODOLOGY_NAMES
+FILTERS_BY_TYPE = FILTERS_BY_METHODOLOGY
+FILTER_CATEGORIES = FILTER_FUNCTIONS
+CATEGORY_NAMES = FUNCTION_NAMES
+FILTERS_BY_CATEGORY = FILTERS_BY_FUNCTION
+categories_for_type = functions_for_methodology
+filters_for_type_and_category = filters_for_methodology_and_function
 
 
 def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:

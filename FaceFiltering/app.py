@@ -11,14 +11,14 @@ import gradio as gr
 import numpy as np
 
 from facefiltering import (
-    CATEGORY_NAMES,
-    FILTER_CATEGORIES,
+    CONVOLUTION_FILTERS,
+    FILTER_FUNCTIONS,
+    FILTER_METHODOLOGIES,
     FILTER_NAMES,
-    FILTER_TYPES,
-    TYPE_DESCRIPTIONS,
-    TYPE_NAMES,
-    categories_for_type,
-    filters_for_type_and_category,
+    METHODOLOGY_DESCRIPTIONS,
+    METHODOLOGY_NAMES,
+    filters_for_methodology_and_function,
+    functions_for_methodology,
     apply_filter,
 )
 from facefiltering.validate import FilterInputError
@@ -37,6 +37,18 @@ _MD = "Median"
 _DI = "Morphological dilation"
 _ER = "Morphological erosion"
 _WN = "Wiener deconvolution"
+_CONV_FILTER_SET = set(CONVOLUTION_FILTERS)
+
+
+def _format_filter_label(name: str) -> str:
+    if name in _CONV_FILTER_SET:
+        return f"{name} [Convolution]"
+    return name
+
+
+def _filter_dropdown_choices(names: list[str]):
+    """Gradio choices as (label, value), keeping value as raw filter name."""
+    return [(_format_filter_label(n), n) for n in names]
 
 _CUSTOM_CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
@@ -594,33 +606,38 @@ def main():
 
         with gr.Row(equal_height=True):
             with gr.Column(scale=1, min_width=300):
-                type_dd = gr.Dropdown(
-                    choices=TYPE_NAMES,
-                    value="All" if "All" in TYPE_NAMES else TYPE_NAMES[0],
-                    label="Type",
+                methodology_dd = gr.Dropdown(
+                    choices=METHODOLOGY_NAMES,
+                    value="All" if "All" in METHODOLOGY_NAMES else METHODOLOGY_NAMES[0],
+                    label="Methodology (how it works)",
                     container=False,
                 )
-                _t0 = "All" if "All" in TYPE_NAMES else TYPE_NAMES[0]
-                _c0 = categories_for_type(_t0)[0]
-                category_dd = gr.Dropdown(
-                    choices=categories_for_type(_t0),
-                    value=_c0,
-                    label="Category",
+                _m0 = "All" if "All" in METHODOLOGY_NAMES else METHODOLOGY_NAMES[0]
+                _f0 = functions_for_methodology(_m0)[0]
+                function_dd = gr.Dropdown(
+                    choices=functions_for_methodology(_m0),
+                    value=_f0,
+                    label="Function (what it does)",
                     container=False,
                 )
                 filter_dd = gr.Dropdown(
-                    choices=filters_for_type_and_category(
-                        _t0,
-                        _c0,
+                    choices=_filter_dropdown_choices(
+                        filters_for_methodology_and_function(
+                            _m0,
+                            _f0,
+                        )
                     ),
-                    value=filters_for_type_and_category(
-                        _t0,
-                        _c0,
+                    value=filters_for_methodology_and_function(
+                        _m0,
+                        _f0,
                     )[0],
                     label="Filter",
                     container=False,
                 )
                 category_label = gr.Markdown("", elem_classes=["subtle"])
+                gr.Markdown(
+                    '<p class="subtle" style="margin:0.2rem 0 0.35rem 0;"><strong>Methodology</strong> = computation approach. <strong>Function</strong> = visual objective.</p>'
+                )
                 apply_btn = gr.Button("Apply", variant="primary", size="lg")
 
                 gr.Markdown("**Parameters** (only for the selected filter)")
@@ -690,33 +707,45 @@ def main():
                 value="No adjustable parameters for this filter.",
                 visible=(name == _HE),
             )
-            cat = FILTER_CATEGORIES.get(name, "Other")
-            typ = FILTER_TYPES.get(name, "Other")
-            typ_desc = TYPE_DESCRIPTIONS.get(typ, "")
-            cat_md = gr.update(value=f"**Type:** {typ} — {typ_desc}<br>**Category:** {cat}")
+            function = FILTER_FUNCTIONS.get(name, "Other")
+            methodology = FILTER_METHODOLOGIES.get(name, "Other")
+            methodology_desc = METHODOLOGY_DESCRIPTIONS.get(methodology, "")
+            tags = "[Convolution]" if name in _CONV_FILTER_SET else "[Non-convolution]"
+            cat_md = gr.update(
+                value=(
+                    f"**Methodology:** {methodology} — {methodology_desc}"
+                    f"<br>**Function:** {function}"
+                    f"<br>**Tag:** {tags}"
+                )
+            )
             return (*vis, hint_md, cat_md)
 
-        def _on_type(t: str):
-            cats = categories_for_type(t)
-            c0 = cats[0]
-            filters = filters_for_type_and_category(t, c0)
-            f0 = filters[0] if filters else FILTER_NAMES[0]
+        def _on_methodology(methodology: str):
+            functions = functions_for_methodology(methodology)
+            function0 = functions[0]
+            filters = filters_for_methodology_and_function(methodology, function0)
+            filter0 = filters[0] if filters else FILTER_NAMES[0]
             return (
-                gr.update(choices=cats, value=c0),
-                gr.update(choices=filters, value=f0),
-                gr.update(value=f"**Type:** {t} — {TYPE_DESCRIPTIONS.get(t,'')}"),
+                gr.update(choices=functions, value=function0),
+                gr.update(choices=_filter_dropdown_choices(filters), value=filter0),
+                gr.update(value=f"**Methodology:** {methodology} — {METHODOLOGY_DESCRIPTIONS.get(methodology,'')}"),
             )
 
-        def _on_category(t: str, cat: str):
-            filters = filters_for_type_and_category(t, cat)
+        def _on_function(methodology: str, function: str):
+            filters = filters_for_methodology_and_function(methodology, function)
             new_filter = filters[0] if filters else FILTER_NAMES[0]
             return (
-                gr.update(choices=filters, value=new_filter),
-                gr.update(value=f"**Type:** {t} — {TYPE_DESCRIPTIONS.get(t,'')}<br>**Category:** {cat}"),
+                gr.update(choices=_filter_dropdown_choices(filters), value=new_filter),
+                gr.update(
+                    value=(
+                        f"**Methodology:** {methodology} — {METHODOLOGY_DESCRIPTIONS.get(methodology,'')}"
+                        f"<br>**Function:** {function}"
+                    )
+                ),
             )
 
-        type_dd.change(fn=_on_type, inputs=[type_dd], outputs=[category_dd, filter_dd, category_label])
-        category_dd.change(fn=_on_category, inputs=[type_dd, category_dd], outputs=[filter_dd, category_label])
+        methodology_dd.change(fn=_on_methodology, inputs=[methodology_dd], outputs=[function_dd, filter_dd, category_label])
+        function_dd.change(fn=_on_function, inputs=[methodology_dd, function_dd], outputs=[filter_dd, category_label])
         filter_dd.change(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
 
         demo.load(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
