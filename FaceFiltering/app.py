@@ -15,10 +15,9 @@ from facefiltering import (
     FILTER_FUNCTIONS,
     FILTER_METHODOLOGIES,
     FILTER_NAMES,
+    FUNCTION_NAMES,
     METHODOLOGY_DESCRIPTIONS,
-    METHODOLOGY_NAMES,
     filters_for_methodology_and_function,
-    functions_for_methodology,
     apply_filter,
 )
 from facefiltering.validate import FilterInputError
@@ -606,16 +605,9 @@ def main():
 
         with gr.Row(equal_height=True):
             with gr.Column(scale=1, min_width=300):
-                methodology_dd = gr.Dropdown(
-                    choices=METHODOLOGY_NAMES,
-                    value="All" if "All" in METHODOLOGY_NAMES else METHODOLOGY_NAMES[0],
-                    label="Methodology (how it works)",
-                    container=False,
-                )
-                _m0 = "All" if "All" in METHODOLOGY_NAMES else METHODOLOGY_NAMES[0]
-                _f0 = functions_for_methodology(_m0)[0]
+                _f0 = "All"
                 function_dd = gr.Dropdown(
-                    choices=functions_for_methodology(_m0),
+                    choices=["All"] + FUNCTION_NAMES,
                     value=_f0,
                     label="Function (what it does)",
                     container=False,
@@ -623,12 +615,12 @@ def main():
                 filter_dd = gr.Dropdown(
                     choices=_filter_dropdown_choices(
                         filters_for_methodology_and_function(
-                            _m0,
+                            "All",
                             _f0,
                         )
                     ),
                     value=filters_for_methodology_and_function(
-                        _m0,
+                        "All",
                         _f0,
                     )[0],
                     label="Filter",
@@ -636,7 +628,7 @@ def main():
                 )
                 category_label = gr.Markdown("", elem_classes=["subtle"])
                 gr.Markdown(
-                    '<p class="subtle" style="margin:0.2rem 0 0.35rem 0;"><strong>Methodology</strong> = computation approach. <strong>Function</strong> = visual objective.</p>'
+                    '<p class="subtle" style="margin:0.2rem 0 0.35rem 0;"><strong>Methodology</strong> is shown automatically for the selected filter. <strong>Function</strong> is used for filtering.</p>'
                 )
                 apply_btn = gr.Button("Apply", variant="primary", size="lg")
 
@@ -701,51 +693,36 @@ def main():
             wiener_ns,
         )
 
-        def _on_filter(name: str):
-            vis = _param_row_updates(name)
-            hint_md = gr.update(
-                value="No adjustable parameters for this filter.",
-                visible=(name == _HE),
-            )
+        def _filter_info(name: str):
             function = FILTER_FUNCTIONS.get(name, "Other")
             methodology = FILTER_METHODOLOGIES.get(name, "Other")
             methodology_desc = METHODOLOGY_DESCRIPTIONS.get(methodology, "")
             tags = "[Convolution]" if name in _CONV_FILTER_SET else "[Non-convolution]"
-            cat_md = gr.update(
+            return gr.update(
                 value=(
                     f"**Methodology:** {methodology} — {methodology_desc}"
                     f"<br>**Function:** {function}"
                     f"<br>**Tag:** {tags}"
                 )
             )
-            return (*vis, hint_md, cat_md)
 
-        def _on_methodology(methodology: str):
-            functions = functions_for_methodology(methodology)
-            function0 = functions[0]
-            filters = filters_for_methodology_and_function(methodology, function0)
-            filter0 = filters[0] if filters else FILTER_NAMES[0]
-            return (
-                gr.update(choices=functions, value=function0),
-                gr.update(choices=_filter_dropdown_choices(filters), value=filter0),
-                gr.update(value=f"**Methodology:** {methodology} — {METHODOLOGY_DESCRIPTIONS.get(methodology,'')}"),
+        def _on_filter(name: str):
+            vis = _param_row_updates(name)
+            hint_md = gr.update(
+                value="No adjustable parameters for this filter.",
+                visible=(name == _HE),
             )
+            return (*vis, hint_md, _filter_info(name))
 
-        def _on_function(methodology: str, function: str):
-            filters = filters_for_methodology_and_function(methodology, function)
+        def _on_function(function: str):
+            filters = filters_for_methodology_and_function("All", function)
             new_filter = filters[0] if filters else FILTER_NAMES[0]
             return (
                 gr.update(choices=_filter_dropdown_choices(filters), value=new_filter),
-                gr.update(
-                    value=(
-                        f"**Methodology:** {methodology} — {METHODOLOGY_DESCRIPTIONS.get(methodology,'')}"
-                        f"<br>**Function:** {function}"
-                    )
-                ),
+                _filter_info(new_filter),
             )
 
-        methodology_dd.change(fn=_on_methodology, inputs=[methodology_dd], outputs=[function_dd, filter_dd, category_label])
-        function_dd.change(fn=_on_function, inputs=[methodology_dd, function_dd], outputs=[filter_dd, category_label])
+        function_dd.change(fn=_on_function, inputs=[function_dd], outputs=[filter_dd, category_label])
         filter_dd.change(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
 
         demo.load(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
