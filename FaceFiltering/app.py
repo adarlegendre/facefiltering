@@ -4,6 +4,7 @@ Run from FaceFiltering folder:  python app.py
 """
 from __future__ import annotations
 
+import base64
 import os
 import traceback
 from pathlib import Path
@@ -158,6 +159,17 @@ def _with_code(md: str, filter_name: str) -> str:
         return md
     return md + f"\n\n### Core computation\n```python\n{snippet}\n```"
 
+
+def _logo_html(height_px: int = 68) -> str:
+    if not _LOGO_PATH.exists():
+        return ""
+    b64 = base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
+    return (
+        '<div style="display:flex; justify-content:flex-end;">'
+        f'<img src="data:image/png;base64,{b64}" alt="logo" style="height:{height_px}px; width:auto;" />'
+        "</div>"
+    )
+
 _CUSTOM_CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
 footer { display: none !important; }
@@ -254,7 +266,44 @@ def _render_heatmap(mat: np.ndarray, size: int = 220) -> np.ndarray:
     img = (x01 * 255.0).astype(np.uint8)
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_NEAREST)
     img = cv2.applyColorMap(img, cv2.COLORMAP_VIRIDIS)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    rows, cols = x.shape
+    cell_h = max(1, size // max(rows, 1))
+    cell_w = max(1, size // max(cols, 1))
+    show_values = (rows * cols <= 144) and (min(cell_h, cell_w) >= 18)
+    if show_values:
+        for r in range(rows):
+            for c in range(cols):
+                v = float(x[r, c])
+                if abs(v - round(v)) < 1e-9:
+                    txt = str(int(round(v)))
+                elif abs(v) >= 1000 or (abs(v) > 0 and abs(v) < 1e-3):
+                    txt = f"{v:.1e}"
+                else:
+                    txt = f"{v:.2f}"
+
+                y0 = r * cell_h
+                x0 = c * cell_w
+                y1 = min(size - 1, (r + 1) * cell_h - 1)
+                x1 = min(size - 1, (c + 1) * cell_w - 1)
+                yc = (y0 + y1) // 2
+                xc = (x0 + x1) // 2
+
+                # Choose text color by local background brightness.
+                bg = img[yc, xc].astype(np.float64)
+                lum = 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2]
+                color = (0, 0, 0) if lum > 150 else (255, 255, 255)
+
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                scale = float(max(0.3, min(0.65, min(cell_h, cell_w) / 42.0)))
+                thick = 1
+                (tw, th), _ = cv2.getTextSize(txt, font, scale, thick)
+                tx = max(0, min(size - tw, xc - tw // 2))
+                ty = max(th + 1, min(size - 1, yc + th // 2))
+                cv2.putText(img, txt, (tx, ty), font, scale, color, thick, cv2.LINE_AA)
+
+    return img
 
 
 def _render_curve(gamma: float, w: int = 360, h: int = 220) -> np.ndarray:
@@ -701,22 +750,14 @@ def main():
     )
 
     with gr.Blocks(
-        title="Image Processing Project : Filters on Human Faces",
+        title="ZPOe 25/26L 2026: Filters On Human Faces",
     ) as demo:
         with gr.Row(equal_height=True):
             with gr.Column(scale=12):
-                gr.HTML('<div class="ff-title"><h2 style="margin:0;">Image Processing Project : Filters on Human Faces</h2></div>')
+                gr.HTML('<div class="ff-title"><h2 style="margin:0;">ZPOe 25/26L 2026: Filters On Human Faces</h2></div>')
             with gr.Column(scale=2):
                 if _LOGO_PATH.exists():
-                    gr.Image(
-                        value=str(_LOGO_PATH),
-                        show_label=False,
-                        container=False,
-                        interactive=False,
-                        show_download_button=False,
-                        elem_classes=["ff-logo"],
-                        height=68,
-                    )
+                    gr.HTML(_logo_html(68))
         with gr.Row():
             theme_btn = gr.Button("Light/Dark", size="sm", variant="secondary")
             gr.Markdown(
