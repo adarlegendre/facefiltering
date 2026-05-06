@@ -4,7 +4,9 @@ Run from FaceFiltering folder:  python app.py
 """
 from __future__ import annotations
 
+import os
 import traceback
+from pathlib import Path
 
 import cv2
 import gradio as gr
@@ -37,6 +39,106 @@ _DI = "Morphological dilation"
 _ER = "Morphological erosion"
 _WN = "Wiener deconvolution"
 _CONV_FILTER_SET = set(CONVOLUTION_FILTERS)
+_LOGO_PATH = Path(__file__).resolve().parent / "facefiltering" / "logo" / "logo.png"
+
+_HOW_IT_WORKS_CODE: dict[str, str] = {
+    _SO: (
+        "# 1) Convolve with x/y Sobel kernels to get directional gradients\n"
+        "gx = convolve_gray(g, kx)\n"
+        "gy = convolve_gray(g, ky)\n"
+        "# 2) Combine both directions into one edge-strength magnitude map\n"
+        "mag = np.hypot(gx, gy)\n"
+        "# 3) Rescale to 0..255 for display\n"
+        "out = normalize_to_u8(mag)"
+    ),
+    _LA: (
+        "# 1) Apply Laplacian (second derivative) to highlight fast intensity changes\n"
+        "lap = convolve_gray(g, lap_kernel)\n"
+        "# 2) Take absolute response and normalize to display range\n"
+        "out = normalize_to_u8(np.abs(lap))"
+    ),
+    _CA: (
+        "# 1) Smooth first to reduce noise before edge detection\n"
+        "blur = convolve_gray(g, gaussian_kernel(5, 1.0))\n"
+        "# 2) Compute gradient magnitude and direction\n"
+        "mag, angle = gradients(blur)\n"
+        "# 3) Keep only local maxima along edge direction (thin edges)\n"
+        "nms = non_max_suppression(mag, angle)\n"
+        "# 4) Use double thresholds and edge tracking by hysteresis\n"
+        "edges = hysteresis(nms, t1, t2)"
+    ),
+    _US: (
+        "# 1) Build a blurred version (low-frequency content)\n"
+        "blur = convolve_bgr(bgr, gaussian_kernel(k, sigma))\n"
+        "# 2) Add scaled high-frequency residual to sharpen details\n"
+        "out = bgr + amount * (bgr - blur)\n"
+        "# 3) Clamp to valid uint8 range\n"
+        "out = clip_u8(out)"
+    ),
+    _GB: (
+        "# 1) Build Gaussian kernel from size/sigma\n"
+        "kernel = gaussian_kernel(k, sigma)\n"
+        "# 2) Convolve each channel to smooth high-frequency noise/details\n"
+        "out = convolve_bgr(bgr, kernel)\n"
+        "# 3) Clamp to displayable uint8\n"
+        "out = clip_u8(out)"
+    ),
+    _BT: (
+        "# Compare each grayscale pixel with threshold T\n"
+        "# >=T becomes white (255), <T becomes black (0)\n"
+        "bw = np.where(gray >= T, 255, 0).astype(np.uint8)"
+    ),
+    _GM: (
+        "# 1) Build lookup-table from gamma curve (power-law mapping)\n"
+        "lut = ((np.arange(256) / 255.0) ** (1.0 / gamma) * 255).astype(np.uint8)\n"
+        "# 2) Map every pixel using the LUT\n"
+        "out = lut[bgr]"
+    ),
+    _HE: (
+        "# 1) Count intensities and accumulate to CDF\n"
+        "hist = np.bincount(y.ravel(), minlength=256)\n"
+        "cdf = hist.cumsum()\n"
+        "# 2) Convert CDF to equalization LUT\n"
+        "lut = build_equalization_lut(cdf)\n"
+        "# 3) Remap luminance with LUT to improve contrast\n"
+        "y_eq = lut[y]"
+    ),
+    _HP: (
+        "# 1) Transform image to frequency domain (centered spectrum)\n"
+        "F = np.fft.fftshift(np.fft.fft2(g))\n"
+        "# 2) Suppress low frequencies using high-pass mask\n"
+        "F_hp = F * gaussian_highpass_mask\n"
+        "# 3) Inverse transform back to spatial domain\n"
+        "out = np.real(np.fft.ifft2(np.fft.ifftshift(F_hp)))"
+    ),
+    _MD: (
+        "# 1) Extract kxk neighborhoods around each pixel\n"
+        "patches = sliding_window_view(channel, (k, k))\n"
+        "# 2) Replace center by median value (robust to impulse noise)\n"
+        "out = np.median(patches, axis=(-2, -1))"
+    ),
+    _DI: (
+        "# 1) Build structuring element (shape template)\n"
+        "kernel = elliptical_kernel(k)\n"
+        "# 2) Dilation keeps local maximum under the kernel\n"
+        "out = morphology_bgr(bgr, kernel, op='dilate', iterations=it)"
+    ),
+    _ER: (
+        "# 1) Build structuring element (shape template)\n"
+        "kernel = elliptical_kernel(k)\n"
+        "# 2) Erosion keeps local minimum under the kernel\n"
+        "out = morphology_bgr(bgr, kernel, op='erode', iterations=it)"
+    ),
+    _WN: (
+        "# 1) Compute Wiener gain from blur transfer function and noise factor\n"
+        "W = np.conj(H) / (np.abs(H)**2 + K)\n"
+        "# 2) Apply gain in frequency domain to estimate sharp image spectrum\n"
+        "F_hat = G * W\n"
+        "# 3) Inverse FFT, then clamp back to image range\n"
+        "f = np.real(np.fft.ifft2(F_hat))\n"
+        "out = clip_u8(f * 255)"
+    ),
+}
 
 
 def _format_filter_label(name: str) -> str:
@@ -48,6 +150,13 @@ def _format_filter_label(name: str) -> str:
 def _filter_dropdown_choices(names: list[str]):
     """Gradio choices as (label, value), keeping value as raw filter name."""
     return [(_format_filter_label(n), n) for n in names]
+
+
+def _with_code(md: str, filter_name: str) -> str:
+    snippet = _HOW_IT_WORKS_CODE.get(filter_name)
+    if not snippet:
+        return md
+    return md + f"\n\n### Core computation\n```python\n{snippet}\n```"
 
 _CUSTOM_CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
@@ -299,7 +408,7 @@ def build_theory(
         sy = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
         viz1 = _render_heatmap(sx)
         viz2 = _render_heatmap(sy)
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _LA:
         md = (
@@ -310,7 +419,7 @@ def build_theory(
         )
         L = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
         viz1 = _render_heatmap(L)
-        return md, viz1, None
+        return _with_code(md, filter_name), viz1, None
 
     if filter_name == _CA:
         t1 = int(canny_t1)
@@ -331,7 +440,7 @@ def build_theory(
             viz1 = np.concatenate([viz1[:110], h2[110:]], axis=0) if viz1.shape == h2.shape else viz1
             edges = cv2.Canny(gray, t1, t2, apertureSize=ap)
             viz2 = _render_before_after(_pick_patch(gray, 31), _pick_patch(edges, 31))
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _GB:
         md = (
@@ -347,7 +456,7 @@ def build_theory(
         g1 = cv2.getGaussianKernel(k, s, ktype=cv2.CV_64F)
         kern = g1 @ g1.T
         viz1 = _render_heatmap(kern, size=220)
-        return md, viz1, None
+        return _with_code(md, filter_name), viz1, None
 
     if filter_name == _US:
         md = (
@@ -362,13 +471,13 @@ def build_theory(
         g1 = cv2.getGaussianKernel(k, s, ktype=cv2.CV_64F)
         kern = g1 @ g1.T
         viz1 = _render_heatmap(kern, size=220)
-        return md, viz1, None
+        return _with_code(md, filter_name), viz1, None
 
     if filter_name == _BT:
         t = int(thresh)
         md = (
             "### Binary threshold\n"
-            "$$I'(x)=\\begin{cases}255,& I(x)\\ge T\\\\0,& I(x)<T\\end{cases}$$\n\n"
+            "$$I'(x)=\\begin{cases}255,& I(x)\\ge T\\\\0,& I(x)\\lt T\\end{cases}$$\n\n"
             f"Current **T = {t}**."
         )
         if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
@@ -377,7 +486,7 @@ def build_theory(
             viz1 = _render_hist_with_vline(gray, t)
             _, bw = cv2.threshold(gray, max(0, min(255, t)), 255, cv2.THRESH_BINARY)
             viz2 = _render_before_after(_pick_patch(gray, 15), _pick_patch(bw, 15))
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _GM:
         g = float(gamma)
@@ -387,7 +496,7 @@ def build_theory(
             f"Current **γ = {g:.2f}**."
         )
         viz1 = _render_curve(g)
-        return md, viz1, None
+        return _with_code(md, filter_name), viz1, None
 
     if filter_name == _HE:
         md = (
@@ -409,7 +518,7 @@ def build_theory(
             cv2.putText(viz1, "before", (32, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 2, cv2.LINE_AA)
             cv2.putText(viz1, "after", (32, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 2, cv2.LINE_AA)
             viz2 = _render_cdf(gray)
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _HP:
         cr = float(cutoff)
@@ -427,7 +536,7 @@ def build_theory(
         dist = np.sqrt((yy - crow) ** 2 + (xx - ccol) ** 2).astype(np.float64)
         hp = 1.0 - np.exp(-(dist ** 2) / (2.0 * (d0 ** 2)))
         viz1 = _render_heatmap(hp, size=220)
-        return md, viz1, None
+        return _with_code(md, filter_name), viz1, None
 
     if filter_name == _MD:
         md = (
@@ -445,7 +554,7 @@ def build_theory(
             viz1 = _render_heatmap(patch, size=220)
             viz2 = _render_sorted_values(patch.reshape(-1))
             md += f"\n\nWorked example: center patch ({k}x{k}) → median of its values."
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _DI:
         md = (
@@ -468,7 +577,7 @@ def build_theory(
             outp = cv2.dilate(patch, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)), iterations=it)
             viz2 = _render_before_after(patch, outp)
             md += f"\n\nWorked example: dilation on a binary patch (T=127), kernel {k}x{k}, iterations={it}."
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _ER:
         md = (
@@ -489,7 +598,7 @@ def build_theory(
             outp = cv2.erode(patch, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)), iterations=it)
             viz2 = _render_before_after(patch, outp)
             md += f"\n\nWorked example: erosion on a binary patch (T=127), kernel {k}x{k}, iterations={it}."
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _WN:
         md = (
@@ -514,7 +623,7 @@ def build_theory(
         radial = gain[center, :].astype(np.float64)
         viz2 = _render_sorted_values(radial)  # reuse plot helper for a simple curve-like view
         md += "\n\nTip: larger K (noise ratio) suppresses aggressive deblurring (more stable)."
-        return md, viz1, viz2
+        return _with_code(md, filter_name), viz1, viz2
 
     return "### Filter\nNo theory available.", None, None
 
@@ -592,11 +701,22 @@ def main():
     )
 
     with gr.Blocks(
-        title="Image Processing Filters on Human Faces",
-        theme=theme,
-        css=_CUSTOM_CSS,
+        title="Image Processing Project : Filters on Human Faces",
     ) as demo:
-        gr.HTML('<div class="ff-title"><h2 style="margin:0;">Image Processing Filters on Human Faces</h2></div>')
+        with gr.Row(equal_height=True):
+            with gr.Column(scale=12):
+                gr.HTML('<div class="ff-title"><h2 style="margin:0;">Image Processing Project : Filters on Human Faces</h2></div>')
+            with gr.Column(scale=2):
+                if _LOGO_PATH.exists():
+                    gr.Image(
+                        value=str(_LOGO_PATH),
+                        show_label=False,
+                        container=False,
+                        interactive=False,
+                        show_download_button=False,
+                        elem_classes=["ff-logo"],
+                        height=68,
+                    )
         with gr.Row():
             theme_btn = gr.Button("Light/Dark", size="sm", variant="secondary")
             gr.Markdown(
@@ -667,11 +787,11 @@ def main():
                     inp = gr.Image(type="numpy", label="Input", height=360)
                     out = gr.Image(type="numpy", label="Output", height=360)
 
-                with gr.Accordion("How it works", open=False):
-                    theory_md = gr.Markdown()
-                    with gr.Row():
-                        theory_viz1 = gr.Image(type="numpy", label="Kernel / Mask / Curve", height=220)
-                        theory_viz2 = gr.Image(type="numpy", label="Extra", height=220)
+                gr.Markdown("### How it works")
+                theory_md = gr.Markdown()
+                with gr.Row():
+                    theory_viz1 = gr.Image(type="numpy", label="Kernel / Mask / Curve", height=220)
+                    theory_viz2 = gr.Image(type="numpy", label="Extra", height=220)
 
         sliders = (
             ksize,
@@ -795,7 +915,9 @@ def main():
             s.change(fn=build_theory, inputs=theory_inputs, outputs=theory_outputs)
         demo.load(fn=build_theory, inputs=theory_inputs, outputs=theory_outputs)
 
-    demo.launch()
+    host = os.environ.get("FF_HOST", os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"))
+    port = int(os.environ.get("FF_PORT", os.environ.get("GRADIO_SERVER_PORT", "7860")))
+    demo.launch(server_name=host, server_port=port, theme=theme, css=_CUSTOM_CSS)
 
 
 if __name__ == "__main__":

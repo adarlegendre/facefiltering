@@ -4,7 +4,6 @@ Stable denominator: |H|^2 + K with K = noise_to_signal.
 """
 from __future__ import annotations
 
-import cv2
 import numpy as np
 
 from facefiltering.gray import to_bgr_from_gray, to_gray_u8
@@ -27,9 +26,9 @@ def apply(bgr: np.ndarray, *, psf_size: int = 15, noise_to_signal: float = 1e-3)
     h = np.exp(-(gx * gx + gy * gy) / (2.0 * sigma * sigma))
     h /= h.sum() + 1e-12
 
-    pad_r = cv2.getOptimalDFTSize(rows)
-    pad_c = cv2.getOptimalDFTSize(cols)
-    gp = cv2.copyMakeBorder(g, 0, pad_r - rows, 0, pad_c - cols, cv2.BORDER_REFLECT)
+    pad_r = 1 << int(np.ceil(np.log2(max(rows, 1))))
+    pad_c = 1 << int(np.ceil(np.log2(max(cols, 1))))
+    gp = np.pad(g, ((0, pad_r - rows), (0, pad_c - cols)), mode="edge")
 
     hp = np.zeros_like(gp, dtype=np.float64)
     hp[:psf, :psf] = h
