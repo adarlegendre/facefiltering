@@ -820,7 +820,7 @@ def build_theory(
         md = (
             "### Swirl\n"
             "Geometric warp around image center with radius-controlled rotation:\n\n"
-            "$$\\theta_{src} = \\theta - s\\,\\frac{R-r}{R},\\; r<R$$\n\n"
+            "$$\\theta_{src} = \\theta - s\\,\\frac{R-r}{R},\\; r\\lt R$$\n\n"
             f"Current **strength = {st:.2f}**, **radius ratio = {rr:.2f}**."
         )
         size = 128
