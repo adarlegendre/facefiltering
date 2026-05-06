@@ -43,6 +43,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--canny-l2", action="store_true", help="Use L2 gradient in Canny")
     p.add_argument("--psf", type=int, default=15, help="Wiener PSF size (odd)")
     p.add_argument("--ns", type=float, default=1e-3, help="Wiener noise-to-signal ratio")
+    p.add_argument("--dodge-strength", type=float, default=0.55, help="Dodge strength (0..0.95)")
+    p.add_argument("--swirl-strength", type=float, default=2.0, help="Swirl strength (negative reverses direction)")
+    p.add_argument("--swirl-radius", type=float, default=0.75, help="Swirl radius ratio (0..1)")
+    p.add_argument("--bloom-thresh", type=int, default=180, help="Bloom threshold (0..255)")
+    p.add_argument("--bloom-sigma", type=float, default=2.5, help="Bloom blur sigma")
+    p.add_argument("--bloom-intensity", type=float, default=0.7, help="Bloom glow intensity")
+    p.add_argument("--poster-levels", type=int, default=8, help="Posterize levels")
+    p.add_argument("--hatch-levels", type=int, default=4, help="Crosshatch tone levels")
+    p.add_argument("--hatch-step", type=int, default=8, help="Crosshatch line spacing")
+    p.add_argument("--zoom-factor", type=float, default=1.2, help="Zoom factor")
+    p.add_argument("--lens-strength", type=float, default=-0.25, help="Lens distortion strength")
     return p.parse_args()
 
 
@@ -71,6 +82,17 @@ def main() -> int:
         "canny_l2": args.canny_l2,
         "psf": args.psf,
         "ns": args.ns,
+        "dodge_strength": args.dodge_strength,
+        "swirl_strength": args.swirl_strength,
+        "swirl_radius": args.swirl_radius,
+        "bloom_thresh": args.bloom_thresh,
+        "bloom_sigma": args.bloom_sigma,
+        "bloom_intensity": args.bloom_intensity,
+        "poster_levels": args.poster_levels,
+        "hatch_levels": args.hatch_levels,
+        "hatch_step": args.hatch_step,
+        "zoom_factor": args.zoom_factor,
+        "lens_strength": args.lens_strength,
     }
     if args.filter == "Morphological dilation":
         kwargs["ksize"] = args.dilate_ksize

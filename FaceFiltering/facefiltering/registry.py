@@ -9,18 +9,25 @@ from typing import Callable, Dict, List, Tuple
 import numpy as np
 
 from facefiltering.filters import binary_threshold as f_bin
+from facefiltering.filters import bloom as f_bloom
 from facefiltering.filters import canny as f_canny
+from facefiltering.filters import crosshatch_threshold as f_ch
 from facefiltering.filters import dilate as f_dilate
+from facefiltering.filters import dodge as f_dodge
 from facefiltering.filters import erode as f_erode
 from facefiltering.filters import gamma as f_gamma
 from facefiltering.filters import gaussian_blur as f_gauss
 from facefiltering.filters import highpass_fourier as f_hp
 from facefiltering.filters import histogram_eq as f_hist
 from facefiltering.filters import laplacian as f_lap
+from facefiltering.filters import lens_distortion as f_ld
 from facefiltering.filters import median as f_median
+from facefiltering.filters import posterize as f_poster
 from facefiltering.filters import sobel as f_sobel
+from facefiltering.filters import swirl as f_swirl
 from facefiltering.filters import unsharp as f_unsharp
 from facefiltering.filters import wiener as f_wiener
+from facefiltering.filters import zoom as f_zoom
 from facefiltering.validate import ensure_bgr_u8
 
 # Stable UI order
@@ -33,10 +40,17 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
     (f_bin.DISPLAY_NAME, f_bin.apply),
     (f_gamma.DISPLAY_NAME, f_gamma.apply),
     (f_hist.DISPLAY_NAME, f_hist.apply),
+    (f_dodge.DISPLAY_NAME, f_dodge.apply),
+    (f_poster.DISPLAY_NAME, f_poster.apply),
+    (f_ch.DISPLAY_NAME, f_ch.apply),
     (f_hp.DISPLAY_NAME, f_hp.apply),
     (f_median.DISPLAY_NAME, f_median.apply),
     (f_dilate.DISPLAY_NAME, f_dilate.apply),
     (f_erode.DISPLAY_NAME, f_erode.apply),
+    (f_swirl.DISPLAY_NAME, f_swirl.apply),
+    (f_zoom.DISPLAY_NAME, f_zoom.apply),
+    (f_ld.DISPLAY_NAME, f_ld.apply),
+    (f_bloom.DISPLAY_NAME, f_bloom.apply),
     (f_wiener.DISPLAY_NAME, f_wiener.apply),
 ]
 
@@ -58,6 +72,13 @@ FILTER_METHODOLOGIES: Dict[str, str] = {
     f_wiener.DISPLAY_NAME: "Frequency-domain (Fourier)",
     f_dilate.DISPLAY_NAME: "Morphological (structuring element)",
     f_erode.DISPLAY_NAME: "Morphological (structuring element)",
+    f_swirl.DISPLAY_NAME: "Geometric warping",
+    f_bloom.DISPLAY_NAME: "Spatial neighborhood",
+    f_dodge.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_poster.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_ch.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_zoom.DISPLAY_NAME: "Geometric warping",
+    f_ld.DISPLAY_NAME: "Geometric warping",
 }
 
 METHODOLOGY_DESCRIPTIONS: Dict[str, str] = {
@@ -67,6 +88,7 @@ METHODOLOGY_DESCRIPTIONS: Dict[str, str] = {
     "Global histogram remapping": "remap intensities using image-wide histogram statistics",
     "Frequency-domain (Fourier)": "process spectral components after Fourier transform",
     "Morphological (structuring element)": "shape-based max/min operations with structuring elements",
+    "Geometric warping": "reposition pixels by coordinate transforms",
 }
 
 METHODOLOGY_NAMES: List[str] = [
@@ -76,6 +98,7 @@ METHODOLOGY_NAMES: List[str] = [
     "Global histogram remapping",
     "Frequency-domain (Fourier)",
     "Morphological (structuring element)",
+    "Geometric warping",
 ]
 
 FILTERS_BY_METHODOLOGY: Dict[str, List[str]] = {
@@ -98,6 +121,13 @@ FILTER_FUNCTIONS: Dict[str, str] = {
     f_wiener.DISPLAY_NAME: "Deblurring / restoration",
     f_dilate.DISPLAY_NAME: "Shape / region refinement",
     f_erode.DISPLAY_NAME: "Shape / region refinement",
+    f_dodge.DISPLAY_NAME: "Tone / brightness adjustment",
+    f_poster.DISPLAY_NAME: "Creative stylization",
+    f_ch.DISPLAY_NAME: "Creative stylization",
+    f_swirl.DISPLAY_NAME: "Creative stylization",
+    f_zoom.DISPLAY_NAME: "Creative stylization",
+    f_ld.DISPLAY_NAME: "Creative stylization",
+    f_bloom.DISPLAY_NAME: "Creative stylization",
 }
 
 FUNCTION_NAMES: List[str] = [
@@ -109,6 +139,7 @@ FUNCTION_NAMES: List[str] = [
     "Contrast enhancement",
     "Deblurring / restoration",
     "Shape / region refinement",
+    "Creative stylization",
 ]
 
 FILTERS_BY_FUNCTION: Dict[str, List[str]] = {
@@ -155,7 +186,9 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
     Run a registered filter by display name.
     kwargs match UI / CLI: ksize, sigma, amount, gauss_sigma, gauss_ksize,
     thresh, gamma, cutoff, iter, psf, ns, canny_t1, canny_t2, canny_ap, canny_l2,
-    erode_ksize, erode_iter
+    erode_ksize, erode_iter, dodge_strength, swirl_strength, swirl_radius,
+    bloom_thresh, bloom_sigma, bloom_intensity, poster_levels, hatch_levels,
+    hatch_step, zoom_factor, lens_strength
     """
     fn = _REGISTRY.get(name)
     if fn is None:
@@ -203,5 +236,32 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
         )
     if name == f_wiener.DISPLAY_NAME:
         return fn(img, psf_size=int(kwargs.get("psf", 15)), noise_to_signal=float(kwargs.get("ns", 1e-3)))
+    if name == f_dodge.DISPLAY_NAME:
+        return fn(img, strength=float(kwargs.get("dodge_strength", 0.55)))
+    if name == f_swirl.DISPLAY_NAME:
+        return fn(
+            img,
+            strength=float(kwargs.get("swirl_strength", 2.0)),
+            radius_ratio=float(kwargs.get("swirl_radius", 0.75)),
+        )
+    if name == f_bloom.DISPLAY_NAME:
+        return fn(
+            img,
+            threshold=int(kwargs.get("bloom_thresh", 180)),
+            sigma=float(kwargs.get("bloom_sigma", 2.5)),
+            intensity=float(kwargs.get("bloom_intensity", 0.7)),
+        )
+    if name == f_poster.DISPLAY_NAME:
+        return fn(img, levels=int(kwargs.get("poster_levels", 8)))
+    if name == f_ch.DISPLAY_NAME:
+        return fn(
+            img,
+            levels=int(kwargs.get("hatch_levels", 4)),
+            step=int(kwargs.get("hatch_step", 8)),
+        )
+    if name == f_zoom.DISPLAY_NAME:
+        return fn(img, factor=float(kwargs.get("zoom_factor", 1.2)))
+    if name == f_ld.DISPLAY_NAME:
+        return fn(img, strength=float(kwargs.get("lens_strength", -0.25)))
 
     raise RuntimeError("Registry dispatch out of sync.")

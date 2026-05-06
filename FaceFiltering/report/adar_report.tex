@@ -1,0 +1,211 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+\onehalfspacing
+
+\title{ZPOe 25/26L 2026: Filters On Human Faces\\\large Technical Report on Filter Computation Methodologies}
+\author{Student: Adar}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Introduction}
+This report presents the implementation methodology for the image processing modules used in the project. The emphasis is on algorithmic computation, numerical handling, and per-filter technical behavior.
+
+\section{Project Structure}
+The implementation follows a modular architecture:
+\begin{itemize}[leftmargin=1.2cm]
+  \item \texttt{facefiltering/filters/*.py}: one module per filter with \texttt{apply(...)}
+  \item \texttt{facefiltering/ops.py}: shared NumPy operations (convolution, median, morphology, histogram equalization helpers)
+  \item \texttt{facefiltering/gray.py}: grayscale and channel-format helpers
+  \item \texttt{facefiltering/validate.py}: input and parameter validation
+  \item \texttt{facefiltering/registry.py}: dispatch and categorization
+\end{itemize}
+
+\section{Shared Numerical Strategy}
+All filters use common safeguards:
+\begin{itemize}[leftmargin=1.2cm]
+  \item Input normalization to contiguous BGR uint8
+  \item Parameter clamping and odd kernel enforcement
+  \item Border padding for neighborhood operations
+  \item NaN/Inf sanitization where required
+  \item Final clipping/normalization to \([0,255]\) and uint8 conversion
+\end{itemize}
+
+\section{Detailed Per-Filter Computation}
+
+\subsection{Sobel (magnitude)}
+\textbf{Purpose:} detect edge strength from first-order derivatives.
+\[
+G_x = I * S_x,\quad G_y = I * S_y,\quad M = \sqrt{G_x^2 + G_y^2}
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Convert image to grayscale.
+  \item Convolve with Sobel kernels \(S_x,S_y\).
+  \item Compute magnitude map with \(\texttt{hypot}\).
+  \item Normalize to uint8 range.
+\end{enumerate}
+
+\subsection{Laplacian (abs)}
+\textbf{Purpose:} detect high curvature / second-derivative intensity changes.
+\[
+\nabla^2 I = \frac{\partial^2 I}{\partial x^2} + \frac{\partial^2 I}{\partial y^2}
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Grayscale conversion.
+  \item Convolve with Laplacian kernel.
+  \item Apply absolute value.
+  \item Normalize to uint8.
+\end{enumerate}
+
+\subsection{Canny Edge Detection}
+\textbf{Purpose:} robust binary edge extraction with edge thinning and connectivity logic.
+Pipeline:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Gaussian smoothing
+  \item Gradient magnitude/direction
+  \item Non-maximum suppression
+  \item Double-threshold hysteresis (strong/weak edge propagation)
+\end{enumerate}
+This implementation computes each stage explicitly in NumPy.
+
+\subsection{Gaussian Blur}
+\textbf{Purpose:} low-pass smoothing.
+\[
+G(x,y)=\frac{1}{2\pi\sigma^2}\exp\left(-\frac{x^2+y^2}{2\sigma^2}\right),\quad I' = I * G
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Build normalized Gaussian kernel from \(\sigma\).
+  \item Convolve each channel.
+  \item Clip to uint8.
+\end{enumerate}
+
+\subsection{Median}
+\textbf{Purpose:} suppress impulse noise while preserving edges.
+\[
+I'(x,y)=\operatorname{median}\{I(u,v)\mid (u,v)\in \mathcal{N}_{k\times k}(x,y)\}
+\]
+Implementation uses sliding windows and per-window median on each channel.
+
+\subsection{Unsharp Mask}
+\textbf{Purpose:} sharpen details by adding high-frequency residual.
+\[
+I_{\text{sharp}} = I + a\,(I - G_\sigma * I)
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Compute Gaussian-blurred image.
+  \item Compute detail residual \(I-\text{blur}\).
+  \item Add scaled detail using factor \(a\).
+  \item Clip to uint8.
+\end{enumerate}
+
+\subsection{Binary Threshold}
+\textbf{Purpose:} intensity-based segmentation.
+\[
+I'(x)=
+\begin{cases}
+255, & I(x)\ge T\\
+0, & I(x)\lt T
+\end{cases}
+\]
+Implementation is an element-wise comparison and mapping to \(\{0,255\}\).
+
+\subsection{Gamma}
+\textbf{Purpose:} nonlinear tone remapping.
+\[
+I' = 255\left(\frac{I}{255}\right)^{1/\gamma}
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Precompute 256-entry lookup table.
+  \item Apply LUT to each pixel/channel.
+\end{enumerate}
+
+\subsection{Histogram Equalization}
+\textbf{Purpose:} improve contrast via cumulative-distribution remapping.
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Compute luminance estimate.
+  \item Build histogram and CDF.
+  \item Derive equalization LUT.
+  \item Remap luminance and reconstruct color intensities.
+\end{enumerate}
+
+\subsection{Morphological Dilation}
+\textbf{Purpose:} expand bright structures.
+\[
+(I\oplus B)(x)=\max_{b\in B} I(x-b)
+\]
+Implementation uses an elliptical structuring element and local maximum selection for each neighborhood.
+
+\subsection{Morphological Erosion}
+\textbf{Purpose:} shrink bright structures.
+\[
+(I\ominus B)(x)=\min_{b\in B} I(x+b)
+\]
+Implementation mirrors dilation but applies local minimum selection.
+
+\subsection{High-pass (Fourier)}
+\textbf{Purpose:} suppress low frequencies and enhance fine detail.
+\[
+F=\mathcal{F}\{I\},\quad F' = H_{\text{hp}}\cdot F,\quad I'=\mathcal{F}^{-1}\{F'\}
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item FFT of padded grayscale image.
+  \item Center spectrum and apply Gaussian high-pass mask.
+  \item Inverse FFT, take real part, normalize.
+\end{enumerate}
+
+\subsection{Wiener Deconvolution}
+\textbf{Purpose:} restoration from blur/noise model.
+\[
+\hat{F}(u,v)=\frac{H^*(u,v)}{|H(u,v)|^2 + K}\,G(u,v)
+\]
+Implementation:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item Build Gaussian PSF from \texttt{psf\_size}.
+  \item FFT of image and PSF transfer function.
+  \item Compute Wiener gain with noise term \(K\).
+  \item Inverse FFT and clip to uint8 output.
+\end{enumerate}
+
+\section{Methodology Coverage Summary}
+\begin{itemize}[leftmargin=1.2cm]
+  \item \textbf{Spatial convolution:} Sobel, Laplacian, Gaussian, Unsharp
+  \item \textbf{Spatial non-linear:} Median, Canny
+  \item \textbf{Point-wise intensity:} Threshold, Gamma
+  \item \textbf{Global remapping:} Histogram Equalization
+  \item \textbf{Morphological:} Dilation, Erosion
+  \item \textbf{Frequency-domain:} High-pass Fourier, Wiener
+\end{itemize}
+
+\section{Conclusion}
+The implemented modules form a complete and methodologically diverse classical image processing suite. Each filter is isolated, computationally explicit, and numerically stabilized, enabling both technical reproducibility and clear algorithm-level analysis.
+
+\end{document}

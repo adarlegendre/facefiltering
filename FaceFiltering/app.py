@@ -39,6 +39,13 @@ _MD = "Median"
 _DI = "Morphological dilation"
 _ER = "Morphological erosion"
 _WN = "Wiener deconvolution"
+_DG = "Dodge"
+_SW = "Swirl"
+_BL = "Bloom"
+_PO = "Posterize"
+_CH = "Crosshatch threshold"
+_ZM = "Zoom"
+_LD = "Lens distortion"
 _CONV_FILTER_SET = set(CONVOLUTION_FILTERS)
 _LOGO_PATH = Path(__file__).resolve().parent / "facefiltering" / "logo" / "logo.png"
 
@@ -138,6 +145,60 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
         "# 3) Inverse FFT, then clamp back to image range\n"
         "f = np.real(np.fft.ifft2(F_hat))\n"
         "out = clip_u8(f * 255)"
+    ),
+    _DG: (
+        "# 1) Apply stable dodge-style tone mapping\n"
+        "denom = 255 - strength * bgr\n"
+        "# 2) Bright areas are boosted more strongly\n"
+        "out = (bgr * 255) / max(denom, 1)\n"
+        "# 3) Clamp to uint8\n"
+        "out = clip_u8(out)"
+    ),
+    _SW: (
+        "# 1) Convert each output pixel to polar coordinates around center\n"
+        "r, theta = to_polar(x, y, cx, cy)\n"
+        "# 2) Rotate angle by radius-dependent offset (stronger near center)\n"
+        "theta_src = theta - strength * (radius - r) / radius\n"
+        "# 3) Sample source image with bilinear interpolation\n"
+        "out = bilinear_sample(src_x, src_y)"
+    ),
+    _BL: (
+        "# 1) Keep only bright pixels above threshold\n"
+        "bright = bgr * (gray >= T)\n"
+        "# 2) Blur bright layer to create glow\n"
+        "glow = convolve_bgr(bright, gaussian_kernel(k, sigma))\n"
+        "# 3) Add glow back to original image\n"
+        "out = clip_u8(bgr + intensity * glow)"
+    ),
+    _PO: (
+        "# 1) Map intensities to a small number of discrete bins\n"
+        "q = round((I/255) * (levels-1)) / (levels-1)\n"
+        "# 2) Scale quantized values back to 0..255\n"
+        "out = clip_u8(q * 255)"
+    ),
+    _CH: (
+        "# 1) Split luminance into a few darkness bands\n"
+        "band = floor(gray / (256/levels))\n"
+        "# 2) Draw hatch line patterns for darker bands\n"
+        "out[(darkness>=1) & diag1] = 0\n"
+        "out[(darkness>=2) & diag2] = 0\n"
+        "# 3) Return stylized black/white hatch image\n"
+        "out = to_bgr_from_gray(out)"
+    ),
+    _ZM: (
+        "# 1) Build inverse zoom mapping around center\n"
+        "src_x = cx + (x - cx)/factor\n"
+        "src_y = cy + (y - cy)/factor\n"
+        "# 2) Resample source coordinates using bilinear interpolation\n"
+        "out = bilinear_sample(src_x, src_y)"
+    ),
+    _LD: (
+        "# 1) Compute normalized radius from optical center\n"
+        "r2 = x_n**2 + y_n**2\n"
+        "# 2) Apply radial lens model (barrel/pincushion)\n"
+        "src = coord / (1 + k*r2)\n"
+        "# 3) Bilinear sample distorted coordinates\n"
+        "out = bilinear_sample(src_x, src_y)"
     ),
 }
 
@@ -251,6 +312,17 @@ def _param_row_updates(filter_name: str):
         gr.update(visible=filter_name == _ER),
         gr.update(visible=filter_name == _WN),
         gr.update(visible=filter_name == _WN),
+        gr.update(visible=filter_name == _DG),
+        gr.update(visible=filter_name == _SW),
+        gr.update(visible=filter_name == _SW),
+        gr.update(visible=filter_name == _BL),
+        gr.update(visible=filter_name == _BL),
+        gr.update(visible=filter_name == _BL),
+        gr.update(visible=filter_name == _PO),
+        gr.update(visible=filter_name == _CH),
+        gr.update(visible=filter_name == _CH),
+        gr.update(visible=filter_name == _ZM),
+        gr.update(visible=filter_name == _LD),
     )
 
 def _render_heatmap(mat: np.ndarray, size: int = 220) -> np.ndarray:
@@ -434,6 +506,17 @@ def build_theory(
     erode_iter: int,
     psf: int,
     wiener_ns: float,
+    dodge_strength: float,
+    swirl_strength: float,
+    swirl_radius: float,
+    bloom_thresh: int,
+    bloom_sigma: float,
+    bloom_intensity: float,
+    poster_levels: int,
+    hatch_levels: int,
+    hatch_step: int,
+    zoom_factor: float,
+    lens_strength: float,
 ):
     """
     Returns:
@@ -674,6 +757,142 @@ def build_theory(
         md += "\n\nTip: larger K (noise ratio) suppresses aggressive deblurring (more stable)."
         return _with_code(md, filter_name), viz1, viz2
 
+    if filter_name == _DG:
+        s = float(dodge_strength)
+        md = (
+            "### Dodge\n"
+            "Brightens tones using a color-dodge style mapping:\n\n"
+            "$$I' = \\frac{255\\,I}{255 - sI}$$\n\n"
+            f"Current **strength = {s:.2f}**."
+        )
+        xs = np.arange(256, dtype=np.float64)
+        ys = (255.0 * xs) / np.maximum(255.0 - s * xs, 1.0)
+        ys = np.clip(ys, 0, 255)
+        w, h = 360, 220
+        canvas = np.full((h, w, 3), 255, dtype=np.uint8)
+        cv2.rectangle(canvas, (30, 10), (w - 10, h - 30), (220, 220, 220), 1)
+        pts = []
+        for x, y in zip(xs, ys):
+            px = int(30 + (x / 255.0) * (w - 40))
+            py = int((h - 30) - (y / 255.0) * (h - 40))
+            pts.append((px, py))
+        cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (180, 80, 20), 2)
+        viz1 = canvas
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _SW:
+        st = float(swirl_strength)
+        rr = float(swirl_radius)
+        md = (
+            "### Swirl\n"
+            "Geometric warp around image center with radius-controlled rotation:\n\n"
+            "$$\\theta_{src} = \\theta - s\\,\\frac{R-r}{R},\\; r<R$$\n\n"
+            f"Current **strength = {st:.2f}**, **radius ratio = {rr:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+        cy = cx = (size - 1) * 0.5
+        dx, dy = xx - cx, yy - cy
+        r = np.sqrt(dx * dx + dy * dy)
+        R = rr * size * 0.5
+        ang = np.zeros_like(r)
+        inside = r < max(R, 1e-6)
+        ang[inside] = st * (R - r[inside]) / max(R, 1e-6)
+        viz1 = _render_heatmap(ang, size=220)
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _BL:
+        t = int(bloom_thresh)
+        s = float(bloom_sigma)
+        a = float(bloom_intensity)
+        md = (
+            "### Bloom\n"
+            "Glow effect from bright regions:\n\n"
+            "$$I' = I + \\alpha\\,\\mathrm{Blur}(I\\cdot\\mathbf{1}_{I\\ge T})$$\n\n"
+            f"Current **threshold={t}**, **sigma={s:.2f}**, **intensity={a:.2f}**."
+        )
+        k = max(3, int(2 * round(3 * s) + 1) | 1)
+        g1 = cv2.getGaussianKernel(k, s, ktype=cv2.CV_64F)
+        viz1 = _render_heatmap(g1 @ g1.T, size=220)
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            viz2 = _render_hist_with_vline(gray, t)
+        return _with_code(md, filter_name), viz1, viz2
+
+    if filter_name == _PO:
+        lv = int(poster_levels)
+        md = (
+            "### Posterize\n"
+            "Reduces tones to a limited set of levels:\n\n"
+            "$$I' = \\mathrm{round}\\left(\\frac{I}{255}(L-1)\\right)\\frac{255}{L-1}$$\n\n"
+            f"Current **levels = {lv}**."
+        )
+        xs = np.arange(256, dtype=np.float64)
+        ys = np.round((xs / 255.0) * (max(2, lv) - 1.0)) / (max(2, lv) - 1.0) * 255.0
+        w, h = 360, 220
+        canvas = np.full((h, w, 3), 255, dtype=np.uint8)
+        cv2.rectangle(canvas, (30, 10), (w - 10, h - 30), (220, 220, 220), 1)
+        pts = []
+        for x, y in zip(xs, ys):
+            px = int(30 + (x / 255.0) * (w - 40))
+            py = int((h - 30) - (y / 255.0) * (h - 40))
+            pts.append((px, py))
+        cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (120, 60, 180), 2)
+        viz1 = canvas
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _CH:
+        lv = int(hatch_levels)
+        st = int(hatch_step)
+        md = (
+            "### Crosshatch threshold\n"
+            "Maps luminance bands to line-hatching patterns for stylized shading.\n\n"
+            f"Current **levels = {lv}**, **step = {st}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size]
+        pat = np.full((size, size), 255, dtype=np.uint8)
+        pat[((xx + yy) % max(3, st)) == 0] = 0
+        pat[((xx - yy) % max(3, st)) == 0] = 0
+        viz1 = cv2.cvtColor(pat, cv2.COLOR_GRAY2RGB)
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _ZM:
+        f = float(zoom_factor)
+        md = (
+            "### Zoom\n"
+            "Geometric scaling around image center with interpolation.\n\n"
+            "$$x_s = c_x + \\frac{x-c_x}{f},\\; y_s = c_y + \\frac{y-c_y}{f}$$\n\n"
+            f"Current **factor = {f:.2f}**."
+        )
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
+            patch = _pick_patch(gray, 31)
+            zoomed = cv2.resize(patch, None, fx=f, fy=f, interpolation=cv2.INTER_LINEAR)
+            zoomed = cv2.resize(zoomed, (patch.shape[1], patch.shape[0]), interpolation=cv2.INTER_LINEAR)
+            viz1 = _render_before_after(patch, zoomed)
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _LD:
+        k = float(lens_strength)
+        md = (
+            "### Lens distortion\n"
+            "Applies radial coordinate remapping (barrel/pincushion).\n\n"
+            "$$x_s = \\frac{x}{1 + kr^2},\\; y_s = \\frac{y}{1 + kr^2}$$\n\n"
+            f"Current **strength = {k:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+        cx = cy = (size - 1) * 0.5
+        xn = (xx - cx) / max(cx, 1.0)
+        yn = (yy - cy) / max(cy, 1.0)
+        r2 = xn * xn + yn * yn
+        viz1 = _render_heatmap(1.0 + k * r2, size=220)
+        return _with_code(md, filter_name), viz1, None
+
     return "### Filter\nNo theory available.", None, None
 
 
@@ -697,6 +916,17 @@ def run_filter(
     erode_iter: int,
     psf: int,
     wiener_ns: float,
+    dodge_strength: float,
+    swirl_strength: float,
+    swirl_radius: float,
+    bloom_thresh: int,
+    bloom_sigma: float,
+    bloom_intensity: float,
+    poster_levels: int,
+    hatch_levels: int,
+    hatch_step: int,
+    zoom_factor: float,
+    lens_strength: float,
 ):
     if image is None:
         return None
@@ -723,6 +953,17 @@ def run_filter(
             "erode_iter": int(erode_iter),
             "psf": int(psf),
             "ns": float(wiener_ns),
+            "dodge_strength": float(dodge_strength),
+            "swirl_strength": float(swirl_strength),
+            "swirl_radius": float(swirl_radius),
+            "bloom_thresh": int(bloom_thresh),
+            "bloom_sigma": float(bloom_sigma),
+            "bloom_intensity": float(bloom_intensity),
+            "poster_levels": int(poster_levels),
+            "hatch_levels": int(hatch_levels),
+            "hatch_step": int(hatch_step),
+            "zoom_factor": float(zoom_factor),
+            "lens_strength": float(lens_strength),
         }
         if filter_name == _DI:
             kwargs["ksize"] = int(dilate_ksize)
@@ -822,6 +1063,17 @@ def main():
                     erode_iter = gr.Slider(1, 8, value=1, step=1, label="Iterations (Erosion)", show_label=True)
                     psf = gr.Slider(5, 31, value=15, step=2, label="PSF size (Wiener)", show_label=True)
                     wiener_ns = gr.Slider(1e-5, 1e-1, value=1e-3, step=1e-5, label="Noise ratio (Wiener)", show_label=True)
+                    dodge_strength = gr.Slider(0.0, 0.95, value=0.55, step=0.01, label="Strength (Dodge)", show_label=True)
+                    swirl_strength = gr.Slider(-6.0, 6.0, value=2.0, step=0.1, label="Strength (Swirl)", show_label=True)
+                    swirl_radius = gr.Slider(0.05, 1.0, value=0.75, step=0.01, label="Radius ratio (Swirl)", show_label=True)
+                    bloom_thresh = gr.Slider(0, 255, value=180, step=1, label="Threshold (Bloom)", show_label=True)
+                    bloom_sigma = gr.Slider(0.1, 15.0, value=2.5, step=0.1, label="Sigma (Bloom glow)", show_label=True)
+                    bloom_intensity = gr.Slider(0.0, 3.0, value=0.7, step=0.05, label="Intensity (Bloom)", show_label=True)
+                    poster_levels = gr.Slider(2, 32, value=8, step=1, label="Levels (Posterize)", show_label=True)
+                    hatch_levels = gr.Slider(2, 8, value=4, step=1, label="Tone levels (Crosshatch)", show_label=True)
+                    hatch_step = gr.Slider(3, 24, value=8, step=1, label="Line spacing (Crosshatch)", show_label=True)
+                    zoom_factor = gr.Slider(0.2, 4.0, value=1.2, step=0.05, label="Zoom factor", show_label=True)
+                    lens_strength = gr.Slider(-0.8, 0.8, value=-0.25, step=0.01, label="Lens strength", show_label=True)
 
             with gr.Column(scale=2, min_width=400):
                 with gr.Row():
@@ -852,6 +1104,17 @@ def main():
             erode_iter,
             psf,
             wiener_ns,
+            dodge_strength,
+            swirl_strength,
+            swirl_radius,
+            bloom_thresh,
+            bloom_sigma,
+            bloom_intensity,
+            poster_levels,
+            hatch_levels,
+            hatch_step,
+            zoom_factor,
+            lens_strength,
         )
 
         def _filter_info(name: str):
@@ -908,6 +1171,17 @@ def main():
             erode_iter,
             psf,
             wiener_ns,
+            dodge_strength,
+            swirl_strength,
+            swirl_radius,
+            bloom_thresh,
+            bloom_sigma,
+            bloom_intensity,
+            poster_levels,
+            hatch_levels,
+            hatch_step,
+            zoom_factor,
+            lens_strength,
         ]
         apply_btn.click(fn=run_filter, inputs=inputs, outputs=out)
 
