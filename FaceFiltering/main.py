@@ -54,6 +54,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hatch-step", type=int, default=8, help="Crosshatch line spacing")
     p.add_argument("--zoom-factor", type=float, default=1.2, help="Zoom factor")
     p.add_argument("--lens-strength", type=float, default=-0.25, help="Lens distortion strength")
+    p.add_argument("--emboss-strength", type=float, default=1.0, help="Relief emboss strength")
+    p.add_argument("--diffuse-radius", type=int, default=3, help="Diffuse random radius")
+    p.add_argument("--diffuse-mix", type=float, default=1.0, help="Diffuse blend mix 0..1")
+    p.add_argument("--hue-degrees", type=float, default=45.0, help="Hue rotation degrees")
     return p.parse_args()
 
 
@@ -93,6 +97,10 @@ def main() -> int:
         "hatch_step": args.hatch_step,
         "zoom_factor": args.zoom_factor,
         "lens_strength": args.lens_strength,
+        "emboss_strength": args.emboss_strength,
+        "diffuse_radius": args.diffuse_radius,
+        "diffuse_mix": args.diffuse_mix,
+        "hue_degrees": args.hue_degrees,
     }
     if args.filter == "Morphological dilation":
         kwargs["ksize"] = args.dilate_ksize

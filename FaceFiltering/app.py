@@ -46,6 +46,9 @@ _PO = "Posterize"
 _CH = "Crosshatch threshold"
 _ZM = "Zoom"
 _LD = "Lens distortion"
+_EM = "Relief emboss"
+_DF = "Diffuse"
+_HR = "Hue rotate"
 _CONV_FILTER_SET = set(CONVOLUTION_FILTERS)
 _LOGO_PATH = Path(__file__).resolve().parent / "facefiltering" / "logo" / "logo.png"
 
@@ -200,6 +203,29 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
         "# 3) Bilinear sample distorted coordinates\n"
         "out = bilinear_sample(src_x, src_y)"
     ),
+    _EM: (
+        "# 1) Convolve grayscale with directional emboss kernel\n"
+        "emb = convolve_gray(gray, emboss_kernel)\n"
+        "# 2) Add neutral gray bias so relief is visible\n"
+        "emb = emb + 128\n"
+        "# 3) Clip to display range\n"
+        "out = clip_u8(emb)"
+    ),
+    _DF: (
+        "# 1) Pick random neighbor coordinates within radius r\n"
+        "sx = x + randint(-r, r)\n"
+        "sy = y + randint(-r, r)\n"
+        "# 2) Sample jittered pixels and blend with original\n"
+        "out = (1-mix)*orig + mix*sampled"
+    ),
+    _HR: (
+        "# 1) Convert BGR to HSV\n"
+        "h, s, v = bgr_to_hsv(bgr)\n"
+        "# 2) Rotate hue angle by chosen degrees\n"
+        "h = (h + deg) % 360\n"
+        "# 3) Convert back HSV to BGR\n"
+        "out = hsv_to_bgr(h, s, v)"
+    ),
 }
 
 
@@ -323,6 +349,10 @@ def _param_row_updates(filter_name: str):
         gr.update(visible=filter_name == _CH),
         gr.update(visible=filter_name == _ZM),
         gr.update(visible=filter_name == _LD),
+        gr.update(visible=filter_name == _EM),
+        gr.update(visible=filter_name == _DF),
+        gr.update(visible=filter_name == _DF),
+        gr.update(visible=filter_name == _HR),
     )
 
 def _render_heatmap(mat: np.ndarray, size: int = 220) -> np.ndarray:
@@ -517,6 +547,10 @@ def build_theory(
     hatch_step: int,
     zoom_factor: float,
     lens_strength: float,
+    emboss_strength: float,
+    diffuse_radius: int,
+    diffuse_mix: float,
+    hue_degrees: float,
 ):
     """
     Returns:
@@ -893,6 +927,58 @@ def build_theory(
         viz1 = _render_heatmap(1.0 + k * r2, size=220)
         return _with_code(md, filter_name), viz1, None
 
+    if filter_name == _EM:
+        s = float(emboss_strength)
+        md = (
+            "### Relief emboss\n"
+            "Directional emboss convolution with gray bias:\n\n"
+            "$$I' = (I * K_{emb}) + 128$$\n\n"
+            f"Current **strength = {s:.2f}**."
+        )
+        kern = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]], dtype=np.float64) * s
+        viz1 = _render_heatmap(kern, size=220)
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _DF:
+        r = int(diffuse_radius)
+        a = float(diffuse_mix)
+        md = (
+            "### Diffuse\n"
+            "Randomly jitters sampling locations in a local neighborhood:\n\n"
+            "$$I'(x,y) = (1-\\alpha)I(x,y) + \\alpha I(x+\\Delta x, y+\\Delta y)$$\n\n"
+            f"Current **radius = {r}**, **mix = {a:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size]
+        rng = np.random.default_rng(12345)
+        ox = rng.integers(-max(1, r), max(1, r) + 1, size=(size, size))
+        oy = rng.integers(-max(1, r), max(1, r) + 1, size=(size, size))
+        disp = np.sqrt(ox * ox + oy * oy).astype(np.float64)
+        viz1 = _render_heatmap(disp, size=220)
+        return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _HR:
+        d = float(hue_degrees)
+        md = (
+            "### Hue rotate\n"
+            "Rotates hue channel in HSV color space while preserving saturation/value:\n\n"
+            "$$H' = (H + \\Delta) \\bmod 360$$\n\n"
+            f"Current **degrees = {d:.1f}**."
+        )
+        xs = np.arange(361, dtype=np.float64)
+        ys = (xs + d) % 360.0
+        w, h = 360, 220
+        canvas = np.full((h, w, 3), 255, dtype=np.uint8)
+        cv2.rectangle(canvas, (30, 10), (w - 10, h - 30), (220, 220, 220), 1)
+        pts = []
+        for x, y in zip(xs, ys):
+            px = int(30 + (x / 360.0) * (w - 40))
+            py = int((h - 30) - (y / 360.0) * (h - 40))
+            pts.append((px, py))
+        cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (30, 140, 220), 2)
+        viz1 = canvas
+        return _with_code(md, filter_name), viz1, None
+
     return "### Filter\nNo theory available.", None, None
 
 
@@ -927,6 +1013,10 @@ def run_filter(
     hatch_step: int,
     zoom_factor: float,
     lens_strength: float,
+    emboss_strength: float,
+    diffuse_radius: int,
+    diffuse_mix: float,
+    hue_degrees: float,
 ):
     if image is None:
         return None
@@ -964,6 +1054,10 @@ def run_filter(
             "hatch_step": int(hatch_step),
             "zoom_factor": float(zoom_factor),
             "lens_strength": float(lens_strength),
+            "emboss_strength": float(emboss_strength),
+            "diffuse_radius": int(diffuse_radius),
+            "diffuse_mix": float(diffuse_mix),
+            "hue_degrees": float(hue_degrees),
         }
         if filter_name == _DI:
             kwargs["ksize"] = int(dilate_ksize)
@@ -1074,6 +1168,10 @@ def main():
                     hatch_step = gr.Slider(3, 24, value=8, step=1, label="Line spacing (Crosshatch)", show_label=True)
                     zoom_factor = gr.Slider(0.2, 4.0, value=1.2, step=0.05, label="Zoom factor", show_label=True)
                     lens_strength = gr.Slider(-0.8, 0.8, value=-0.25, step=0.01, label="Lens strength", show_label=True)
+                    emboss_strength = gr.Slider(0.1, 4.0, value=1.0, step=0.05, label="Strength (Relief emboss)", show_label=True)
+                    diffuse_radius = gr.Slider(1, 20, value=3, step=1, label="Radius (Diffuse)", show_label=True)
+                    diffuse_mix = gr.Slider(0.0, 1.0, value=1.0, step=0.05, label="Mix (Diffuse)", show_label=True)
+                    hue_degrees = gr.Slider(-180, 180, value=45, step=1, label="Degrees (Hue rotate)", show_label=True)
 
             with gr.Column(scale=2, min_width=400):
                 with gr.Row():
@@ -1115,6 +1213,10 @@ def main():
             hatch_step,
             zoom_factor,
             lens_strength,
+            emboss_strength,
+            diffuse_radius,
+            diffuse_mix,
+            hue_degrees,
         )
 
         def _filter_info(name: str):
@@ -1182,6 +1284,10 @@ def main():
             hatch_step,
             zoom_factor,
             lens_strength,
+            emboss_strength,
+            diffuse_radius,
+            diffuse_mix,
+            hue_degrees,
         ]
         apply_btn.click(fn=run_filter, inputs=inputs, outputs=out)
 

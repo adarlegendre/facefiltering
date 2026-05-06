@@ -13,16 +13,19 @@ from facefiltering.filters import bloom as f_bloom
 from facefiltering.filters import canny as f_canny
 from facefiltering.filters import crosshatch_threshold as f_ch
 from facefiltering.filters import dilate as f_dilate
+from facefiltering.filters import diffuse as f_diffuse
 from facefiltering.filters import dodge as f_dodge
 from facefiltering.filters import erode as f_erode
 from facefiltering.filters import gamma as f_gamma
 from facefiltering.filters import gaussian_blur as f_gauss
 from facefiltering.filters import highpass_fourier as f_hp
 from facefiltering.filters import histogram_eq as f_hist
+from facefiltering.filters import hue_rotate as f_hue
 from facefiltering.filters import laplacian as f_lap
 from facefiltering.filters import lens_distortion as f_ld
 from facefiltering.filters import median as f_median
 from facefiltering.filters import posterize as f_poster
+from facefiltering.filters import relief_emboss as f_emb
 from facefiltering.filters import sobel as f_sobel
 from facefiltering.filters import swirl as f_swirl
 from facefiltering.filters import unsharp as f_unsharp
@@ -40,9 +43,12 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
     (f_bin.DISPLAY_NAME, f_bin.apply),
     (f_gamma.DISPLAY_NAME, f_gamma.apply),
     (f_hist.DISPLAY_NAME, f_hist.apply),
+    (f_emb.DISPLAY_NAME, f_emb.apply),
     (f_dodge.DISPLAY_NAME, f_dodge.apply),
     (f_poster.DISPLAY_NAME, f_poster.apply),
     (f_ch.DISPLAY_NAME, f_ch.apply),
+    (f_diffuse.DISPLAY_NAME, f_diffuse.apply),
+    (f_hue.DISPLAY_NAME, f_hue.apply),
     (f_hp.DISPLAY_NAME, f_hp.apply),
     (f_median.DISPLAY_NAME, f_median.apply),
     (f_dilate.DISPLAY_NAME, f_dilate.apply),
@@ -77,8 +83,11 @@ FILTER_METHODOLOGIES: Dict[str, str] = {
     f_dodge.DISPLAY_NAME: "Point-wise intensity mapping",
     f_poster.DISPLAY_NAME: "Point-wise intensity mapping",
     f_ch.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_hue.DISPLAY_NAME: "Point-wise intensity mapping",
     f_zoom.DISPLAY_NAME: "Geometric warping",
     f_ld.DISPLAY_NAME: "Geometric warping",
+    f_emb.DISPLAY_NAME: "Spatial neighborhood",
+    f_diffuse.DISPLAY_NAME: "Spatial neighborhood",
 }
 
 METHODOLOGY_DESCRIPTIONS: Dict[str, str] = {
@@ -124,10 +133,13 @@ FILTER_FUNCTIONS: Dict[str, str] = {
     f_dodge.DISPLAY_NAME: "Tone / brightness adjustment",
     f_poster.DISPLAY_NAME: "Creative stylization",
     f_ch.DISPLAY_NAME: "Creative stylization",
+    f_hue.DISPLAY_NAME: "Creative stylization",
     f_swirl.DISPLAY_NAME: "Creative stylization",
     f_zoom.DISPLAY_NAME: "Creative stylization",
     f_ld.DISPLAY_NAME: "Creative stylization",
     f_bloom.DISPLAY_NAME: "Creative stylization",
+    f_emb.DISPLAY_NAME: "Creative stylization",
+    f_diffuse.DISPLAY_NAME: "Creative stylization",
 }
 
 FUNCTION_NAMES: List[str] = [
@@ -188,7 +200,8 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
     thresh, gamma, cutoff, iter, psf, ns, canny_t1, canny_t2, canny_ap, canny_l2,
     erode_ksize, erode_iter, dodge_strength, swirl_strength, swirl_radius,
     bloom_thresh, bloom_sigma, bloom_intensity, poster_levels, hatch_levels,
-    hatch_step, zoom_factor, lens_strength
+    hatch_step, zoom_factor, lens_strength, emboss_strength, diffuse_radius,
+    diffuse_mix, hue_degrees
     """
     fn = _REGISTRY.get(name)
     if fn is None:
@@ -263,5 +276,15 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
         return fn(img, factor=float(kwargs.get("zoom_factor", 1.2)))
     if name == f_ld.DISPLAY_NAME:
         return fn(img, strength=float(kwargs.get("lens_strength", -0.25)))
+    if name == f_emb.DISPLAY_NAME:
+        return fn(img, strength=float(kwargs.get("emboss_strength", 1.0)))
+    if name == f_diffuse.DISPLAY_NAME:
+        return fn(
+            img,
+            radius=int(kwargs.get("diffuse_radius", 3)),
+            mix=float(kwargs.get("diffuse_mix", 1.0)),
+        )
+    if name == f_hue.DISPLAY_NAME:
+        return fn(img, degrees=float(kwargs.get("hue_degrees", 45.0)))
 
     raise RuntimeError("Registry dispatch out of sync.")
