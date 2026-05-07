@@ -259,7 +259,7 @@ def _logo_html(height_px: int = 68) -> str:
     )
 
 
-def _gallery_items(limit: int = 24) -> list[tuple[str, str]]:
+def _gallery_items(limit: int = 24) -> list[str]:
     if not _GALLERY_DIR.exists():
         return []
     paths: list[Path] = []
@@ -267,7 +267,7 @@ def _gallery_items(limit: int = 24) -> list[tuple[str, str]]:
         paths.extend(sorted(_GALLERY_DIR.glob(ext)))
     if limit > 0:
         paths = paths[: max(0, int(limit))]
-    return [(str(p), p.stem) for p in paths]
+    return [str(p) for p in paths]
 
 
 def _read_rgb_image(path: str) -> np.ndarray | None:
@@ -279,7 +279,7 @@ def _read_rgb_image(path: str) -> np.ndarray | None:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-def _gallery_slice(items: list[tuple[str, str]], start: int, page_size: int) -> list[tuple[str, str]]:
+def _gallery_slice(items: list[str], start: int, page_size: int) -> list[str]:
     if not items:
         return []
     s = max(0, min(int(start), max(0, len(items) - 1)))
@@ -287,7 +287,7 @@ def _gallery_slice(items: list[tuple[str, str]], start: int, page_size: int) -> 
     return items[s:e]
 
 
-def _gallery_caption(items: list[tuple[str, str]], start: int, page_size: int) -> str:
+def _gallery_caption(items: list[str], start: int, page_size: int) -> str:
     total = len(items)
     if total == 0:
         return "No gallery images found."
@@ -1309,17 +1309,15 @@ def main():
                 _filter_info(new_filter),
             )
 
-        def _on_gallery_select(items: list[tuple[str, str]] | None, evt: gr.SelectData):
+        def _on_gallery_select(items: list[str] | None, evt: gr.SelectData):
             if not items:
                 return None
             idx = evt.index[0] if isinstance(evt.index, tuple) else int(evt.index)
             if idx < 0 or idx >= len(items):
                 return None
-            item = items[idx]
-            path = item[0] if isinstance(item, (list, tuple)) else item
-            return _read_rgb_image(str(path))
+            return _read_rgb_image(str(items[idx]))
 
-        def _gallery_prev(items: list[tuple[str, str]], start: int):
+        def _gallery_prev(items: list[str], start: int):
             total = len(items) if items else 0
             if total == 0:
                 return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
@@ -1327,7 +1325,7 @@ def main():
             page = _gallery_slice(items, new_start, gallery_page_size)
             return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size)
 
-        def _gallery_next(items: list[tuple[str, str]], start: int):
+        def _gallery_next(items: list[str], start: int):
             total = len(items) if items else 0
             if total == 0:
                 return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
