@@ -51,6 +51,7 @@ _DF = "Diffuse"
 _HR = "Hue rotate"
 _CONV_FILTER_SET = set(CONVOLUTION_FILTERS)
 _LOGO_PATH = Path(__file__).resolve().parent / "facefiltering" / "logo" / "logo.png"
+_GALLERY_DIR = Path(__file__).resolve().parent / "faces"
 
 _HOW_IT_WORKS_CODE: dict[str, str] = {
     _SO: (
@@ -257,6 +258,43 @@ def _logo_html(height_px: int = 68) -> str:
         "</div>"
     )
 
+
+def _gallery_items(limit: int = 24) -> list[tuple[str, str]]:
+    if not _GALLERY_DIR.exists():
+        return []
+    paths: list[Path] = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+        paths.extend(sorted(_GALLERY_DIR.glob(ext)))
+    if limit > 0:
+        paths = paths[: max(0, int(limit))]
+    return [(str(p), p.stem) for p in paths]
+
+
+def _read_rgb_image(path: str) -> np.ndarray | None:
+    if not path:
+        return None
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        return None
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def _gallery_slice(items: list[tuple[str, str]], start: int, page_size: int) -> list[tuple[str, str]]:
+    if not items:
+        return []
+    s = max(0, min(int(start), max(0, len(items) - 1)))
+    e = min(len(items), s + max(1, int(page_size)))
+    return items[s:e]
+
+
+def _gallery_caption(items: list[tuple[str, str]], start: int, page_size: int) -> str:
+    total = len(items)
+    if total == 0:
+        return "No gallery images found."
+    s = max(0, min(int(start), max(0, total - 1)))
+    e = min(total, s + max(1, int(page_size)))
+    return f"Showing {s + 1}-{e} of {total}"
+
 _CUSTOM_CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
 footer { display: none !important; }
@@ -264,6 +302,8 @@ footer { display: none !important; }
 .compact-params label { font-size: 0.82rem !important; }
 .subtle { opacity: 0.75; font-size: 0.9rem !important; }
 .ff-title { text-align: center; margin: 0.1rem 0 0.25rem 0; }
+.ff-gallery { min-height: 86px !important; }
+.ff-gallery img { object-fit: cover !important; }
 
 /* Theme toggle (client-side). Default: dark. */
 :root{
@@ -1128,61 +1168,82 @@ def main():
                 )
                 apply_btn = gr.Button("Apply", variant="primary", size="lg")
 
-                gr.Markdown("**Parameters** (only for the selected filter)")
-                param_hint = gr.Markdown("", visible=False, elem_classes=["subtle"])
+                with gr.Accordion("Parameters (only for selected filter)", open=False):
+                    param_hint = gr.Markdown("", visible=False, elem_classes=["subtle"])
 
-                with gr.Group(elem_classes=["compact-params"]):
-                    ksize = gr.Slider(
-                        3, 15, value=3, step=2,
-                        label="Kernel size (Sobel / Laplacian / Median)",
-                        show_label=True,
-                    )
-                    canny_t1 = gr.Slider(0, 500, value=80, step=1, label="Canny threshold1", show_label=True)
-                    canny_t2 = gr.Slider(0, 500, value=160, step=1, label="Canny threshold2", show_label=True)
-                    canny_ap = gr.Slider(3, 7, value=3, step=2, label="Canny aperture (3/5/7)", show_label=True)
-                    sigma = gr.Slider(0.1, 5.0, value=1.0, step=0.1, label="Blur sigma (Unsharp)", show_label=True)
-                    amount = gr.Slider(0.0, 3.0, value=1.5, step=0.1, label="Strength (Unsharp)", show_label=True)
-                    gauss_sigma = gr.Slider(0.1, 15.0, value=2.0, step=0.1, label="Sigma (Gaussian blur)", show_label=True)
-                    gauss_ksize = gr.Slider(
-                        0, 31, value=0, step=2,
-                        label="Kernel (Gaussian): 0 = auto",
-                        show_label=True,
-                    )
-                    thresh = gr.Slider(0, 255, value=127, step=1, label="Threshold (Binary)", show_label=True)
-                    gamma = gr.Slider(0.2, 3.0, value=1.0, step=0.05, label="Gamma (1 = unchanged)", show_label=True)
-                    cutoff = gr.Slider(0.02, 0.25, value=0.08, step=0.01, label="Cutoff (High-pass)", show_label=True)
-                    dilate_ksize = gr.Slider(3, 21, value=5, step=2, label="Kernel (Dilation)", show_label=True)
-                    dilate_iter = gr.Slider(1, 8, value=1, step=1, label="Iterations (Dilation)", show_label=True)
-                    erode_ksize = gr.Slider(3, 21, value=5, step=2, label="Kernel (Erosion)", show_label=True)
-                    erode_iter = gr.Slider(1, 8, value=1, step=1, label="Iterations (Erosion)", show_label=True)
-                    psf = gr.Slider(5, 31, value=15, step=2, label="PSF size (Wiener)", show_label=True)
-                    wiener_ns = gr.Slider(1e-5, 1e-1, value=1e-3, step=1e-5, label="Noise ratio (Wiener)", show_label=True)
-                    dodge_strength = gr.Slider(0.0, 0.95, value=0.55, step=0.01, label="Strength (Dodge)", show_label=True)
-                    swirl_strength = gr.Slider(-6.0, 6.0, value=2.0, step=0.1, label="Strength (Swirl)", show_label=True)
-                    swirl_radius = gr.Slider(0.05, 1.0, value=0.75, step=0.01, label="Radius ratio (Swirl)", show_label=True)
-                    bloom_thresh = gr.Slider(0, 255, value=180, step=1, label="Threshold (Bloom)", show_label=True)
-                    bloom_sigma = gr.Slider(0.1, 15.0, value=2.5, step=0.1, label="Sigma (Bloom glow)", show_label=True)
-                    bloom_intensity = gr.Slider(0.0, 3.0, value=0.7, step=0.05, label="Intensity (Bloom)", show_label=True)
-                    poster_levels = gr.Slider(2, 32, value=8, step=1, label="Levels (Posterize)", show_label=True)
-                    hatch_levels = gr.Slider(2, 8, value=4, step=1, label="Tone levels (Crosshatch)", show_label=True)
-                    hatch_step = gr.Slider(3, 24, value=8, step=1, label="Line spacing (Crosshatch)", show_label=True)
-                    zoom_factor = gr.Slider(0.2, 4.0, value=1.2, step=0.05, label="Zoom factor", show_label=True)
-                    lens_strength = gr.Slider(-0.8, 0.8, value=-0.25, step=0.01, label="Lens strength", show_label=True)
-                    emboss_strength = gr.Slider(0.1, 4.0, value=1.0, step=0.05, label="Strength (Relief emboss)", show_label=True)
-                    diffuse_radius = gr.Slider(1, 20, value=3, step=1, label="Radius (Diffuse)", show_label=True)
-                    diffuse_mix = gr.Slider(0.0, 1.0, value=1.0, step=0.05, label="Mix (Diffuse)", show_label=True)
-                    hue_degrees = gr.Slider(-180, 180, value=45, step=1, label="Degrees (Hue rotate)", show_label=True)
+                    with gr.Group(elem_classes=["compact-params"]):
+                        ksize = gr.Slider(
+                            3, 15, value=3, step=2,
+                            label="Kernel size (Sobel / Laplacian / Median)",
+                            show_label=True,
+                        )
+                        canny_t1 = gr.Slider(0, 500, value=80, step=1, label="Canny threshold1", show_label=True)
+                        canny_t2 = gr.Slider(0, 500, value=160, step=1, label="Canny threshold2", show_label=True)
+                        canny_ap = gr.Slider(3, 7, value=3, step=2, label="Canny aperture (3/5/7)", show_label=True)
+                        sigma = gr.Slider(0.1, 5.0, value=1.0, step=0.1, label="Blur sigma (Unsharp)", show_label=True)
+                        amount = gr.Slider(0.0, 3.0, value=1.5, step=0.1, label="Strength (Unsharp)", show_label=True)
+                        gauss_sigma = gr.Slider(0.1, 15.0, value=2.0, step=0.1, label="Sigma (Gaussian blur)", show_label=True)
+                        gauss_ksize = gr.Slider(
+                            0, 31, value=0, step=2,
+                            label="Kernel (Gaussian): 0 = auto",
+                            show_label=True,
+                        )
+                        thresh = gr.Slider(0, 255, value=127, step=1, label="Threshold (Binary)", show_label=True)
+                        gamma = gr.Slider(0.2, 3.0, value=1.0, step=0.05, label="Gamma (1 = unchanged)", show_label=True)
+                        cutoff = gr.Slider(0.02, 0.25, value=0.08, step=0.01, label="Cutoff (High-pass)", show_label=True)
+                        dilate_ksize = gr.Slider(3, 21, value=5, step=2, label="Kernel (Dilation)", show_label=True)
+                        dilate_iter = gr.Slider(1, 8, value=1, step=1, label="Iterations (Dilation)", show_label=True)
+                        erode_ksize = gr.Slider(3, 21, value=5, step=2, label="Kernel (Erosion)", show_label=True)
+                        erode_iter = gr.Slider(1, 8, value=1, step=1, label="Iterations (Erosion)", show_label=True)
+                        psf = gr.Slider(5, 31, value=15, step=2, label="PSF size (Wiener)", show_label=True)
+                        wiener_ns = gr.Slider(1e-5, 1e-1, value=1e-3, step=1e-5, label="Noise ratio (Wiener)", show_label=True)
+                        dodge_strength = gr.Slider(0.0, 0.95, value=0.55, step=0.01, label="Strength (Dodge)", show_label=True)
+                        swirl_strength = gr.Slider(-6.0, 6.0, value=2.0, step=0.1, label="Strength (Swirl)", show_label=True)
+                        swirl_radius = gr.Slider(0.05, 1.0, value=0.75, step=0.01, label="Radius ratio (Swirl)", show_label=True)
+                        bloom_thresh = gr.Slider(0, 255, value=180, step=1, label="Threshold (Bloom)", show_label=True)
+                        bloom_sigma = gr.Slider(0.1, 15.0, value=2.5, step=0.1, label="Sigma (Bloom glow)", show_label=True)
+                        bloom_intensity = gr.Slider(0.0, 3.0, value=0.7, step=0.05, label="Intensity (Bloom)", show_label=True)
+                        poster_levels = gr.Slider(2, 32, value=8, step=1, label="Levels (Posterize)", show_label=True)
+                        hatch_levels = gr.Slider(2, 8, value=4, step=1, label="Tone levels (Crosshatch)", show_label=True)
+                        hatch_step = gr.Slider(3, 24, value=8, step=1, label="Line spacing (Crosshatch)", show_label=True)
+                        zoom_factor = gr.Slider(0.2, 4.0, value=1.2, step=0.05, label="Zoom factor", show_label=True)
+                        lens_strength = gr.Slider(-0.8, 0.8, value=-0.25, step=0.01, label="Lens strength", show_label=True)
+                        emboss_strength = gr.Slider(0.1, 4.0, value=1.0, step=0.05, label="Strength (Relief emboss)", show_label=True)
+                        diffuse_radius = gr.Slider(1, 20, value=3, step=1, label="Radius (Diffuse)", show_label=True)
+                        diffuse_mix = gr.Slider(0.0, 1.0, value=1.0, step=0.05, label="Mix (Diffuse)", show_label=True)
+                        hue_degrees = gr.Slider(-180, 180, value=45, step=1, label="Degrees (Hue rotate)", show_label=True)
 
             with gr.Column(scale=2, min_width=400):
+                all_gallery_items = _gallery_items(0)
+                gallery_page_size = 12
+                gallery_start = gr.State(0)
+                gallery_all = gr.State(all_gallery_items)
+                gallery_caption = gr.Markdown(
+                    _gallery_caption(all_gallery_items, 0, gallery_page_size),
+                    elem_classes=["subtle"],
+                )
                 with gr.Row():
-                    inp = gr.Image(type="numpy", label="Input", height=360)
-                    out = gr.Image(type="numpy", label="Output", height=360)
+                    gallery_prev_btn = gr.Button("◀", size="sm")
+                    gallery_next_btn = gr.Button("▶", size="sm")
+                sample_gallery = gr.Gallery(
+                    value=_gallery_slice(all_gallery_items, 0, gallery_page_size),
+                    label="Sample gallery (click to load)",
+                    columns=6,
+                    rows=1,
+                    height=95,
+                    object_fit="cover",
+                    elem_classes=["ff-gallery"],
+                    allow_preview=False,
+                )
+                with gr.Row():
+                    inp = gr.Image(type="numpy", label="Input (or upload your own)", height=300)
+                    out = gr.Image(type="numpy", label="Output", height=300)
 
                 gr.Markdown("### How it works")
                 theory_md = gr.Markdown()
                 with gr.Row():
-                    theory_viz1 = gr.Image(type="numpy", label="Kernel / Mask / Curve", height=220)
-                    theory_viz2 = gr.Image(type="numpy", label="Extra", height=220)
+                    theory_viz1 = gr.Image(type="numpy", label="Kernel / Mask / Curve", height=170)
+                    theory_viz2 = gr.Image(type="numpy", label="Extra", height=170)
 
         sliders = (
             ksize,
@@ -1248,8 +1309,38 @@ def main():
                 _filter_info(new_filter),
             )
 
+        def _on_gallery_select(items: list[tuple[str, str]] | None, evt: gr.SelectData):
+            if not items:
+                return None
+            idx = evt.index[0] if isinstance(evt.index, tuple) else int(evt.index)
+            if idx < 0 or idx >= len(items):
+                return None
+            item = items[idx]
+            path = item[0] if isinstance(item, (list, tuple)) else item
+            return _read_rgb_image(str(path))
+
+        def _gallery_prev(items: list[tuple[str, str]], start: int):
+            total = len(items) if items else 0
+            if total == 0:
+                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
+            new_start = max(0, int(start) - gallery_page_size)
+            page = _gallery_slice(items, new_start, gallery_page_size)
+            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size)
+
+        def _gallery_next(items: list[tuple[str, str]], start: int):
+            total = len(items) if items else 0
+            if total == 0:
+                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
+            max_start = max(0, total - gallery_page_size)
+            new_start = min(max_start, int(start) + gallery_page_size)
+            page = _gallery_slice(items, new_start, gallery_page_size)
+            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size)
+
         function_dd.change(fn=_on_function, inputs=[function_dd], outputs=[filter_dd, category_label])
         filter_dd.change(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
+        sample_gallery.select(fn=_on_gallery_select, inputs=[sample_gallery], outputs=[inp])
+        gallery_prev_btn.click(fn=_gallery_prev, inputs=[gallery_all, gallery_start], outputs=[sample_gallery, gallery_start, gallery_caption])
+        gallery_next_btn.click(fn=_gallery_next, inputs=[gallery_all, gallery_start], outputs=[sample_gallery, gallery_start, gallery_caption])
 
         demo.load(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
 

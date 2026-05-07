@@ -164,6 +164,7 @@ CONVOLUTION_FILTERS: List[str] = [
     f_lap.DISPLAY_NAME,
     f_gauss.DISPLAY_NAME,
     f_unsharp.DISPLAY_NAME,
+    f_emb.DISPLAY_NAME,
     f_hp.DISPLAY_NAME,  # Fourier implementation but equivalent to convolution in space.
 ]
 
