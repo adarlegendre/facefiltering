@@ -1218,6 +1218,7 @@ def main():
                 gallery_page_size = 12
                 gallery_start = gr.State(0)
                 gallery_all = gr.State(all_gallery_items)
+                gallery_page_items = gr.State(_gallery_slice(all_gallery_items, 0, gallery_page_size))
                 gallery_caption = gr.Markdown(
                     _gallery_caption(all_gallery_items, 0, gallery_page_size),
                     elem_classes=["subtle"],
@@ -1321,25 +1322,33 @@ def main():
         def _gallery_prev(items: list[str], start: int):
             total = len(items) if items else 0
             if total == 0:
-                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
+                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size), []
             new_start = max(0, int(start) - gallery_page_size)
             page = _gallery_slice(items, new_start, gallery_page_size)
-            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size)
+            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size), page
 
         def _gallery_next(items: list[str], start: int):
             total = len(items) if items else 0
             if total == 0:
-                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size)
+                return gr.update(value=[]), 0, _gallery_caption([], 0, gallery_page_size), []
             max_start = max(0, total - gallery_page_size)
             new_start = min(max_start, int(start) + gallery_page_size)
             page = _gallery_slice(items, new_start, gallery_page_size)
-            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size)
+            return gr.update(value=page), new_start, _gallery_caption(items, new_start, gallery_page_size), page
 
         function_dd.change(fn=_on_function, inputs=[function_dd], outputs=[filter_dd, category_label])
         filter_dd.change(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
-        sample_gallery.select(fn=_on_gallery_select, inputs=[sample_gallery], outputs=[inp])
-        gallery_prev_btn.click(fn=_gallery_prev, inputs=[gallery_all, gallery_start], outputs=[sample_gallery, gallery_start, gallery_caption])
-        gallery_next_btn.click(fn=_gallery_next, inputs=[gallery_all, gallery_start], outputs=[sample_gallery, gallery_start, gallery_caption])
+        sample_gallery.select(fn=_on_gallery_select, inputs=[gallery_page_items], outputs=[inp])
+        gallery_prev_btn.click(
+            fn=_gallery_prev,
+            inputs=[gallery_all, gallery_start],
+            outputs=[sample_gallery, gallery_start, gallery_caption, gallery_page_items],
+        )
+        gallery_next_btn.click(
+            fn=_gallery_next,
+            inputs=[gallery_all, gallery_start],
+            outputs=[sample_gallery, gallery_start, gallery_caption, gallery_page_items],
+        )
 
         demo.load(fn=_on_filter, inputs=[filter_dd], outputs=[*sliders, param_hint, category_label])
 
