@@ -1228,6 +1228,7 @@ def main():
                 sample_gallery = gr.Gallery(
                     value=_gallery_slice(all_gallery_items, 0, gallery_page_size),
                     label="Sample gallery (click to load)",
+                    show_label=False,
                     columns=6,
                     rows=1,
                     height=95,
