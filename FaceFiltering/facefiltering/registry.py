@@ -8,7 +8,9 @@ from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 
+from facefiltering.filters import background_removal as f_bgrem
 from facefiltering.filters import binary_threshold as f_bin
+from facefiltering.filters import bilateral as f_bilateral
 from facefiltering.filters import bloom as f_bloom
 from facefiltering.filters import canny as f_canny
 from facefiltering.filters import crosshatch_threshold as f_ch
@@ -40,6 +42,8 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
     (f_canny.DISPLAY_NAME, f_canny.apply),
     (f_unsharp.DISPLAY_NAME, f_unsharp.apply),
     (f_gauss.DISPLAY_NAME, f_gauss.apply),
+    (f_bilateral.DISPLAY_NAME, f_bilateral.apply),
+    (f_bgrem.DISPLAY_NAME, f_bgrem.apply),
     (f_bin.DISPLAY_NAME, f_bin.apply),
     (f_gamma.DISPLAY_NAME, f_gamma.apply),
     (f_hist.DISPLAY_NAME, f_hist.apply),
@@ -70,7 +74,9 @@ FILTER_METHODOLOGIES: Dict[str, str] = {
     f_canny.DISPLAY_NAME: "Spatial neighborhood",
     f_unsharp.DISPLAY_NAME: "Spatial neighborhood",
     f_gauss.DISPLAY_NAME: "Spatial neighborhood",
+    f_bilateral.DISPLAY_NAME: "Spatial neighborhood",
     f_median.DISPLAY_NAME: "Spatial neighborhood",
+    f_bgrem.DISPLAY_NAME: "Spatial neighborhood",
     f_bin.DISPLAY_NAME: "Point-wise intensity mapping",
     f_gamma.DISPLAY_NAME: "Point-wise intensity mapping",
     f_hist.DISPLAY_NAME: "Global histogram remapping",
@@ -122,7 +128,9 @@ FILTER_FUNCTIONS: Dict[str, str] = {
     f_canny.DISPLAY_NAME: "Edge detection",
     f_unsharp.DISPLAY_NAME: "Sharpening / detail enhancement",
     f_gauss.DISPLAY_NAME: "Smoothing / denoising",
+    f_bilateral.DISPLAY_NAME: "Smoothing / denoising",
     f_median.DISPLAY_NAME: "Smoothing / denoising",
+    f_bgrem.DISPLAY_NAME: "Segmentation / masking",
     f_bin.DISPLAY_NAME: "Segmentation / masking",
     f_gamma.DISPLAY_NAME: "Tone / brightness adjustment",
     f_hist.DISPLAY_NAME: "Contrast enhancement",
@@ -229,6 +237,20 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
             img,
             sigma=float(kwargs.get("gauss_sigma", 1.0)),
             ksize=int(kwargs.get("gauss_ksize", 0)),
+        )
+    if name == f_bilateral.DISPLAY_NAME:
+        return fn(
+            img,
+            ksize=int(kwargs.get("bilateral_ksize", 7)),
+            sigma_space=float(kwargs.get("bilateral_sigma_space", 3.0)),
+            sigma_color=float(kwargs.get("bilateral_sigma_color", 25.0)),
+        )
+    if name == f_bgrem.DISPLAY_NAME:
+        return fn(
+            img,
+            margin_ratio=float(kwargs.get("bg_margin_ratio", 0.08)),
+            iterations=int(kwargs.get("bg_iterations", 5)),
+            smooth_ksize=int(kwargs.get("bg_smooth_ksize", 5)),
         )
     if name == f_bin.DISPLAY_NAME:
         return fn(img, thresh=int(kwargs.get("thresh", 127)))

@@ -1,0 +1,298 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\lstdefinestyle{pycode}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!40!black},
+  stringstyle=\color{orange!50!black},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single
+}
+
+\title{Filter Theory and Implementation Report\\\large xotiena00}
+\author{FaceFiltering Project Analysis}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Scope}
+This report analyzes five filters implemented in the project:
+\begin{itemize}[leftmargin=1.2em]
+  \item Unsharp Mask
+  \item Gamma
+  \item Relief Emboss
+  \item Bloom
+  \item Binary Threshold
+\end{itemize}
+
+For each filter, the report explains:
+\begin{itemize}[leftmargin=1.2em]
+  \item how it works mathematically,
+  \item parameters used in the code (defaults and clamping),
+  \item what the filter is used for,
+  \item implementation methodology and algorithm summary.
+\end{itemize}
+
+\section{Shared Implementation Methodology}
+All five filters follow common preprocessing and safety steps:
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Input normalization}: \texttt{ensure\_bgr\_u8(...)} converts input to contiguous BGR \texttt{uint8} \((H,W,3)\), handling grayscale and BGRA cases.
+  \item \textbf{Parameter clamping}: values are bounded using \texttt{clamp\_float} / \texttt{clamp\_int}, preventing unstable or invalid configurations.
+  \item \textbf{Numeric working type}: computations use \texttt{float64} for precision.
+  \item \textbf{Output quantization}: results are clipped to \([0,255]\) and converted back to \texttt{uint8}.
+\end{enumerate}
+
+\section{Quick Comparison}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Filter} & \textbf{Methodology} & \textbf{Main Purpose} & \textbf{Type} \\
+\midrule
+Unsharp Mask & Spatial convolution + residual boost & Sharpen details & Neighborhood \\
+Gamma & LUT power-law mapping & Tone / midtone control & Point-wise \\
+Relief Emboss & Directional convolution on gray & Stylized relief shading & Neighborhood \\
+Bloom & Bright mask + blur + additive blend & Glow around highlights & Hybrid \\
+Binary Threshold & Global threshold on luminance & Segmentation / masking & Point-wise \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Unsharp Mask}
+\subsection*{How it works}
+Unsharp masking sharpens by adding a scaled high-frequency residual:
+\[
+I_{\text{sharp}} = I + a\left(I - G_{\sigma} * I\right)
+\]
+where \(G_{\sigma}\) is a Gaussian blur kernel and \(a\) is sharpening strength.
+
+\subsection*{Parameters used}
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{sigma} (default \(1.0\), clamped to \([0.05, 50.0]\))
+  \item \texttt{amount} (default \(1.5\), clamped to \([0.0, 5.0]\))
+\end{itemize}
+Kernel size is auto-derived:
+\[
+k = 2\cdot \mathrm{round}(3\sigma) + 1
+\]
+then forced odd and clamped to \(3 \le k \le 31\).
+
+\subsection*{What it is used for}
+\begin{itemize}[leftmargin=1.2em]
+  \item Enhancing edges and texture.
+  \item Restoring perceived detail after softening/compression.
+  \item Controlled sharpening without replacing original image structure.
+\end{itemize}
+
+\subsection*{Code methodology and algorithm summary}
+\begin{enumerate}[leftmargin=1.5em]
+  \item Validate BGR image and clamp parameters.
+  \item Build Gaussian kernel from \(\sigma\).
+  \item Blur each channel with convolution.
+  \item Compute \(I + a(I-\text{blur})\).
+  \item Clip and cast to \texttt{uint8}.
+\end{enumerate}
+
+\begin{lstlisting}[style=pycode]
+sigma = clamp_float(sigma, 0.05, 50.0)
+amount = clamp_float(amount, 0.0, 5.0)
+k = int(2 * round(3 * sigma) + 1)
+k = max(3, min(31, k | 1))
+blur = convolve_bgr(bgr, gaussian_kernel(k, sigma), pad_mode="edge")
+out = bgr.astype(np.float64) + amount * (bgr.astype(np.float64) - blur)
+\end{lstlisting}
+
+\section{Gamma}
+\subsection*{How it works}
+Gamma applies a point-wise power-law intensity transform:
+\[
+I' = 255\left(\frac{I}{255}\right)^{1/\gamma}
+\]
+implemented as a look-up table (LUT) for speed.
+
+\subsection*{Parameters used}
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{gamma} (default \(1.0\), clamped to \([0.05, 5.0]\))
+\end{itemize}
+Implementation also enforces \(g \ge 10^{-6}\) to avoid divide-by-zero.
+
+\subsection*{What it is used for}
+\begin{itemize}[leftmargin=1.2em]
+  \item Midtone brightness control.
+  \item Tone correction for dark or washed-out images.
+  \item Global intensity remapping without neighborhood operations.
+\end{itemize}
+
+\subsection*{Code methodology and algorithm summary}
+\begin{enumerate}[leftmargin=1.5em]
+  \item Validate image and clamp \(\gamma\).
+  \item Precompute 256-entry LUT from power law.
+  \item Apply LUT by direct indexing (\texttt{table[bgr]}).
+\end{enumerate}
+
+\begin{lstlisting}[style=pycode]
+g = max(clamp_float(gamma, 0.05, 5.0), 1e-6)
+inv = 1.0 / g
+table = ((np.arange(256, dtype=np.float64) / 255.0) ** inv * 255.0)
+table = np.clip(np.round(table), 0, 255).astype(np.uint8)
+out = table[bgr]
+\end{lstlisting}
+
+\section{Relief Emboss}
+\subsection*{How it works}
+Relief emboss converts to grayscale, applies a directional emboss kernel, then adds a gray bias:
+\[
+E = I_g * K_{\text{emboss}}, \quad I' = \mathrm{clip}(E + 128)
+\]
+The \(+128\) shift centers values around neutral gray, making raised/sunken shading visible.
+
+\subsection*{Parameters used}
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{strength} (default \(1.0\), clamped to \([0.1, 4.0]\))
+\end{itemize}
+Kernel:
+\[
+K =
+\begin{bmatrix}
+-2 & -1 & 0\\
+-1 & 1 & 1\\
+0 & 1 & 2
+\end{bmatrix}\cdot \texttt{strength}
+\]
+
+\subsection*{What it is used for}
+\begin{itemize}[leftmargin=1.2em]
+  \item Stylized artistic rendering.
+  \item Emphasizing directional surface-like texture.
+  \item Producing pseudo-3D relief effect from 2D intensity changes.
+\end{itemize}
+
+\subsection*{Code methodology and algorithm summary}
+\begin{enumerate}[leftmargin=1.5em]
+  \item Validate image, clamp strength.
+  \item Convert BGR to grayscale luminance.
+  \item Convolve with emboss kernel (edge padding).
+  \item Add \(128\), clip to \([0,255]\).
+  \item Replicate gray channel back to BGR.
+\end{enumerate}
+
+\begin{lstlisting}[style=pycode]
+s = clamp_float(strength, 0.1, 4.0)
+g = to_gray_u8(bgr).astype(np.float64)
+kernel = np.array([[-2., -1., 0.], [-1., 1., 1.], [0., 1., 2.]]) * s
+emb = convolve_gray(g, kernel, pad_mode="edge") + 128.0
+out = np.clip(np.round(emb), 0, 255).astype(np.uint8)
+\end{lstlisting}
+
+\section{Bloom}
+\subsection*{How it works}
+Bloom creates glow around bright regions:
+\[
+M(x)=\mathbf{1}_{I_g(x)\ge T}, \quad B=I\odot M, \quad G=G_{\sigma}*B, \quad I' = I+\alpha G
+\]
+where \(T\) is brightness threshold and \(\alpha\) is glow intensity.
+
+\subsection*{Parameters used}
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{threshold} (default \(180\), clamped to \([0,255]\))
+  \item \texttt{sigma} (default \(2.5\), clamped to \([0.1,20.0]\))
+  \item \texttt{intensity} (default \(0.7\), clamped to \([0.0,3.0]\))
+\end{itemize}
+Gaussian kernel size is derived from \(\sigma\), forced odd, and clamped to \(3\ldots51\).
+
+\subsection*{What it is used for}
+\begin{itemize}[leftmargin=1.2em]
+  \item Cinematic glow around highlights.
+  \item Emphasizing bright sources (lights, reflections).
+  \item Stylized soft highlight enhancement.
+\end{itemize}
+
+\subsection*{Code methodology and algorithm summary}
+\begin{enumerate}[leftmargin=1.5em]
+  \item Validate image and clamp parameters.
+  \item Convert to grayscale for threshold mask.
+  \item Keep only bright pixels via binary mask.
+  \item Blur masked bright layer with Gaussian convolution.
+  \item Add scaled glow to original image and clip.
+\end{enumerate}
+
+\begin{lstlisting}[style=pycode]
+t = clamp_int(threshold, 0, 255)
+s = clamp_float(sigma, 0.1, 20.0)
+a = clamp_float(intensity, 0.0, 3.0)
+g = to_gray_u8(bgr)
+bright_mask = (g >= t).astype(np.float64)[:, :, None]
+bright = bgr.astype(np.float64) * bright_mask
+glow = convolve_bgr(bright, gaussian_kernel(k, s), pad_mode="edge")
+out = bgr.astype(np.float64) + a * glow
+\end{lstlisting}
+
+\section{Binary Threshold}
+\subsection*{How it works}
+Binary threshold maps luminance to two classes:
+\[
+I'(x)=
+\begin{cases}
+255, & I_g(x)\ge T\\
+0, & I_g(x)<T
+\end{cases}
+\]
+This is a hard segmentation by global threshold \(T\).
+
+\subsection*{Parameters used}
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{thresh} (default \(127\), clamped to \([0,255]\))
+\end{itemize}
+
+\subsection*{What it is used for}
+\begin{itemize}[leftmargin=1.2em]
+  \item Foreground-background separation in simple scenes.
+  \item Preprocessing for morphology/shape analysis.
+  \item High-contrast stylized black/white output.
+\end{itemize}
+
+\subsection*{Code methodology and algorithm summary}
+\begin{enumerate}[leftmargin=1.5em]
+  \item Validate image and clamp threshold.
+  \item Convert BGR to grayscale luminance.
+  \item Apply per-pixel comparison with \(T\).
+  \item Convert resulting gray mask to 3-channel BGR.
+\end{enumerate}
+
+\begin{lstlisting}[style=pycode]
+t = clamp_int(thresh, 0, 255)
+g = to_gray_u8(bgr)
+bw = np.where(g >= t, 255, 0).astype(np.uint8)
+out = to_bgr_from_gray(bw)
+\end{lstlisting}
+
+\section{Overall Algorithmic Notes}
+\begin{itemize}[leftmargin=1.2em]
+  \item \textbf{Linear neighborhood filters}: Unsharp Mask and Relief Emboss use convolution kernels.
+  \item \textbf{Point-wise intensity mapping}: Gamma and Binary Threshold operate independently per pixel once luminance is computed.
+  \item \textbf{Hybrid compositing}: Bloom combines segmentation (threshold), convolution (blur), and additive blending.
+  \item \textbf{Numerical stability}: project-wide clamping and \texttt{uint8} clipping enforce safe image bounds.
+\end{itemize}
+
+\section{Conclusion}
+The five filters cover complementary operations: sharpening, tone mapping, stylization, glow synthesis, and segmentation. The implementation is consistent and modular: shared validation, explicit parameter bounds, and clear NumPy-based algorithm design. This makes behavior predictable for both interactive use and further extension in the FaceFiltering framework.
+
+\end{document}

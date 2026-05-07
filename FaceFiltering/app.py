@@ -31,6 +31,8 @@ _LA = "Laplacian (abs)"
 _CA = "Canny edge detection"
 _US = "Unsharp mask"
 _GB = "Gaussian blur"
+_BI = "Bilateral"
+_BR = "Foreground extraction"
 _BT = "Binary threshold"
 _GM = "Gamma"
 _HE = "Histogram equalization"
@@ -94,6 +96,22 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
         "out = convolve_bgr(bgr, kernel)\n"
         "# 3) Clamp to displayable uint8\n"
         "out = clip_u8(out)"
+    ),
+    _BI: (
+        "# 1) Compute spatial Gaussian weights by distance\n"
+        "w_s = exp(-||p-q||^2 / (2*sigma_space^2))\n"
+        "# 2) Compute range Gaussian weights by intensity similarity\n"
+        "w_r = exp(-(I(p)-I(q))^2 / (2*sigma_color^2))\n"
+        "# 3) Normalize weighted average (edge-preserving smoothing)\n"
+        "out(p) = sum_q w_s*w_r*I(q) / sum_q w_s*w_r"
+    ),
+    _BR: (
+        "# 1) Initialize rectangular foreground prior inside image borders\n"
+        "mask = grabcut_init_rect(margin_ratio)\n"
+        "# 2) Run GrabCut iterations to separate foreground/background\n"
+        "fg = grabcut(mask, iter)\n"
+        "# 3) Smooth mask and keep only foreground pixels\n"
+        "out = bgr * smooth(fg, ksize)"
     ),
     _BT: (
         "# Compare each grayscale pixel with threshold T\n"
@@ -369,6 +387,12 @@ def _param_row_updates(filter_name: str):
         gr.update(visible=filter_name == _US),
         gr.update(visible=filter_name == _GB),
         gr.update(visible=filter_name == _GB),
+        gr.update(visible=filter_name == _BI),
+        gr.update(visible=filter_name == _BI),
+        gr.update(visible=filter_name == _BI),
+        gr.update(visible=filter_name == _BR),
+        gr.update(visible=filter_name == _BR),
+        gr.update(visible=filter_name == _BR),
         gr.update(visible=filter_name == _BT),
         gr.update(visible=filter_name == _GM),
         gr.update(visible=filter_name == _HP),
@@ -567,6 +591,12 @@ def build_theory(
     amount: float,
     gauss_sigma: float,
     gauss_ksize: int,
+    bilateral_ksize: int,
+    bilateral_sigma_space: float,
+    bilateral_sigma_color: float,
+    bg_margin_ratio: float,
+    bg_iterations: int,
+    bg_smooth_ksize: int,
     thresh: int,
     gamma: float,
     cutoff: float,
@@ -663,6 +693,78 @@ def build_theory(
         kern = g1 @ g1.T
         viz1 = _render_heatmap(kern, size=220)
         return _with_code(md, filter_name), viz1, None
+
+    if filter_name == _BI:
+        k = max(3, int(bilateral_ksize) | 1)
+        k = min(k, 21)
+        ss = float(max(bilateral_sigma_space, 1e-6))
+        sc = float(max(bilateral_sigma_color, 1e-6))
+        md = (
+            "### Bilateral filter (edge-preserving smoothing)\n"
+            "Combines spatial and intensity similarity weights:\n\n"
+            "$$I'(p)=\\frac{\\sum_{q\\in\\Omega} "
+            "\\exp\\!\\left(-\\frac{\\|p-q\\|^2}{2\\sigma_s^2}\\right)"
+            "\\exp\\!\\left(-\\frac{(I(p)-I(q))^2}{2\\sigma_r^2}\\right)I(q)}"
+            "{\\sum_{q\\in\\Omega} "
+            "\\exp\\!\\left(-\\frac{\\|p-q\\|^2}{2\\sigma_s^2}\\right)"
+            "\\exp\\!\\left(-\\frac{(I(p)-I(q))^2}{2\\sigma_r^2}\\right)}$$\n\n"
+            f"Current **kernel={k}**, **sigma_space={ss:.2f}**, **sigma_color={sc:.2f}**."
+        )
+        ax = np.arange(k, dtype=np.float64) - (k // 2)
+        xx, yy = np.meshgrid(ax, ax)
+        spatial = np.exp(-(xx * xx + yy * yy) / (2.0 * ss * ss))
+        viz1 = _render_heatmap(spatial, size=220)
+
+        xs = np.arange(256, dtype=np.float64)
+        ys = np.exp(-((xs) ** 2) / (2.0 * sc * sc))
+        w, h = 360, 220
+        canvas = np.full((h, w, 3), 255, dtype=np.uint8)
+        cv2.rectangle(canvas, (30, 10), (w - 10, h - 30), (220, 220, 220), 1)
+        pts = []
+        for x, y in zip(xs, ys):
+            px = int(30 + (x / 255.0) * (w - 40))
+            py = int((h - 30) - y * (h - 40))
+            pts.append((px, py))
+        cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (180, 70, 40), 2)
+        cv2.putText(canvas, "range weight vs |I(p)-I(q)|", (32, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 70, 40), 2, cv2.LINE_AA)
+        viz2 = canvas
+        return _with_code(md, filter_name), viz1, viz2
+
+    if filter_name == _BR:
+        mr = float(max(bg_margin_ratio, 1e-6))
+        it = int(bg_iterations)
+        k = max(1, int(bg_smooth_ksize) | 1)
+        md = (
+            "### Background removal (GrabCut)\n"
+            "Uses graph-cut segmentation initialized by a central rectangle.\n\n"
+            "Pixels are classified as foreground/background by minimizing an energy with "
+            "color-model and smoothness terms:\n\n"
+            "$$E(L)=U(L,\\theta, z)+V(L, z)$$\n\n"
+            f"Current **margin ratio={mr:.3f}**, **iterations={it}**, **smooth kernel={k}**."
+        )
+        size = 220
+        rect = np.zeros((size, size), dtype=np.float64)
+        mx = int(max(1, min(size // 2 - 2, round(size * mr))))
+        my = mx
+        rect[my:size - my, mx:size - mx] = 1.0
+        viz1 = _render_heatmap(rect, size=220)
+
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            h, w = bgr.shape[:2]
+            x = max(1, min(int(round(w * mr)), (w - 3) // 2))
+            y = max(1, min(int(round(h * mr)), (h - 3) // 2))
+            mask = np.zeros((h, w), dtype=np.uint8)
+            bgd_model = np.zeros((1, 65), dtype=np.float64)
+            fgd_model = np.zeros((1, 65), dtype=np.float64)
+            cv2.grabCut(bgr, mask, (x, y, max(1, w - 2 * x), max(1, h - 2 * y)), bgd_model, fgd_model, max(1, it), cv2.GC_INIT_WITH_RECT)
+            fg = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+            if k > 1:
+                ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+                fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, ker, iterations=1)
+                fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, ker, iterations=1)
+            viz2 = cv2.cvtColor(fg, cv2.COLOR_GRAY2RGB)
+        return _with_code(md, filter_name), viz1, viz2
 
     if filter_name == _US:
         md = (
@@ -1033,6 +1135,12 @@ def run_filter(
     amount: float,
     gauss_sigma: float,
     gauss_ksize: int,
+    bilateral_ksize: int,
+    bilateral_sigma_space: float,
+    bilateral_sigma_color: float,
+    bg_margin_ratio: float,
+    bg_iterations: int,
+    bg_smooth_ksize: int,
     thresh: int,
     gamma: float,
     cutoff: float,
@@ -1075,6 +1183,12 @@ def run_filter(
             "amount": float(amount),
             "gauss_sigma": float(gauss_sigma),
             "gauss_ksize": int(gauss_ksize),
+            "bilateral_ksize": int(bilateral_ksize),
+            "bilateral_sigma_space": float(bilateral_sigma_space),
+            "bilateral_sigma_color": float(bilateral_sigma_color),
+            "bg_margin_ratio": float(bg_margin_ratio),
+            "bg_iterations": int(bg_iterations),
+            "bg_smooth_ksize": int(bg_smooth_ksize),
             "thresh": int(thresh),
             "gamma": float(gamma),
             "cutoff": float(cutoff),
@@ -1188,6 +1302,12 @@ def main():
                             label="Kernel (Gaussian): 0 = auto",
                             show_label=True,
                         )
+                        bilateral_ksize = gr.Slider(3, 21, value=7, step=2, label="Kernel (Bilateral)", show_label=True)
+                        bilateral_sigma_space = gr.Slider(0.1, 25.0, value=3.0, step=0.1, label="Sigma space (Bilateral)", show_label=True)
+                        bilateral_sigma_color = gr.Slider(1.0, 255.0, value=25.0, step=1.0, label="Sigma color (Bilateral)", show_label=True)
+                        bg_margin_ratio = gr.Slider(0.01, 0.45, value=0.08, step=0.01, label="Init margin ratio (Background removal)", show_label=True)
+                        bg_iterations = gr.Slider(1, 15, value=5, step=1, label="Iterations (Background removal)", show_label=True)
+                        bg_smooth_ksize = gr.Slider(1, 31, value=5, step=2, label="Mask smooth kernel (Background removal)", show_label=True)
                         thresh = gr.Slider(0, 255, value=127, step=1, label="Threshold (Binary)", show_label=True)
                         gamma = gr.Slider(0.2, 3.0, value=1.0, step=0.05, label="Gamma (1 = unchanged)", show_label=True)
                         cutoff = gr.Slider(0.02, 0.25, value=0.08, step=0.01, label="Cutoff (High-pass)", show_label=True)
@@ -1256,6 +1376,12 @@ def main():
             amount,
             gauss_sigma,
             gauss_ksize,
+            bilateral_ksize,
+            bilateral_sigma_space,
+            bilateral_sigma_color,
+            bg_margin_ratio,
+            bg_iterations,
+            bg_smooth_ksize,
             thresh,
             gamma,
             cutoff,
@@ -1363,6 +1489,12 @@ def main():
             amount,
             gauss_sigma,
             gauss_ksize,
+            bilateral_ksize,
+            bilateral_sigma_space,
+            bilateral_sigma_color,
+            bg_margin_ratio,
+            bg_iterations,
+            bg_smooth_ksize,
             thresh,
             gamma,
             cutoff,
