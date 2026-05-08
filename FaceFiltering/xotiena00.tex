@@ -9,6 +9,7 @@
 \usepackage{hyperref}
 \usepackage{xcolor}
 \usepackage{listings}
+\usepackage{graphicx}
 
 \hypersetup{
   colorlinks=true,
@@ -26,6 +27,7 @@
   breaklines=true,
   frame=single
 }
+\newcommand{\img}[2][]{\includegraphics[#1]{\detokenize{#2}}}
 
 \title{Filter Theory and Implementation Report\\\large xotiena00}
 \author{FaceFiltering Project Analysis}
@@ -35,264 +37,346 @@
 \maketitle
 
 \section{Scope}
-This report analyzes five filters implemented in the project:
+This report redesigns \texttt{xotiena00} for the requested filter groups:
 \begin{itemize}[leftmargin=1.2em]
-  \item Unsharp Mask
-  \item Gamma
-  \item Relief Emboss
-  \item Bloom
-  \item Binary Threshold
+  \item \textbf{Smoothing / Denoising}: Bilateral, Mean, Gaussian
+  \item \textbf{Tone / Brightness Adjustment}: Gamma, Dodge
 \end{itemize}
 
-For each filter, the report explains:
-\begin{itemize}[leftmargin=1.2em]
-  \item how it works mathematically,
-  \item parameters used in the code (defaults and clamping),
-  \item what the filter is used for,
-  \item implementation methodology and algorithm summary.
-\end{itemize}
+The report compares and classifies filters, summarizes theory and practical application,
+and discusses computational cost and implementation strategy.
 
-\section{Shared Implementation Methodology}
-All five filters follow common preprocessing and safety steps:
-\begin{enumerate}[leftmargin=1.5em]
-  \item \textbf{Input normalization}: \texttt{ensure\_bgr\_u8(...)} converts input to contiguous BGR \texttt{uint8} \((H,W,3)\), handling grayscale and BGRA cases.
-  \item \textbf{Parameter clamping}: values are bounded using \texttt{clamp\_float} / \texttt{clamp\_int}, preventing unstable or invalid configurations.
-  \item \textbf{Numeric working type}: computations use \texttt{float64} for precision.
-  \item \textbf{Output quantization}: results are clipped to \([0,255]\) and converted back to \texttt{uint8}.
-\end{enumerate}
-
-\section{Quick Comparison}
+\section{Classification and Comparison}
 \begin{center}
-\begin{tabular}{@{}llll@{}}
+\begin{tabular}{@{}lllll@{}}
 \toprule
-\textbf{Filter} & \textbf{Methodology} & \textbf{Main Purpose} & \textbf{Type} \\
+\textbf{Filter} & \textbf{Group} & \textbf{Methodology} & \textbf{Linear?} & \textbf{Edge Preservation} \\
 \midrule
-Unsharp Mask & Spatial convolution + residual boost & Sharpen details & Neighborhood \\
-Gamma & LUT power-law mapping & Tone / midtone control & Point-wise \\
-Relief Emboss & Directional convolution on gray & Stylized relief shading & Neighborhood \\
-Bloom & Bright mask + blur + additive blend & Glow around highlights & Hybrid \\
-Binary Threshold & Global threshold on luminance & Segmentation / masking & Point-wise \\
+Mean & Smooth/Denoise & Spatial neighborhood averaging & Yes & Low \\
+Gaussian & Smooth/Denoise & Spatial convolution (Gaussian kernel) & Yes & Low--Medium \\
+Bilateral & Smooth/Denoise & Nonlinear spatial+range weighting & No & High \\
+Gamma & Tone/Brightness & Point-wise power-law mapping (LUT) & No & N/A \\
+Dodge & Tone/Brightness & Point-wise nonlinear brightening curve & No & N/A \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\section{Unsharp Mask}
-\subsection*{How it works}
-Unsharp masking sharpens by adding a scaled high-frequency residual:
+\section{Theory and Application}
+
+\subsection{Mean Filter}
+\textbf{Theory:}
 \[
-I_{\text{sharp}} = I + a\left(I - G_{\sigma} * I\right)
+I'(p)=\frac{1}{|\Omega|}\sum_{q\in\Omega} I(q)
 \]
-where \(G_{\sigma}\) is a Gaussian blur kernel and \(a\) is sharpening strength.
+It replaces each pixel by the arithmetic mean of a local window \(\Omega\).
 
-\subsection*{Parameters used}
-\begin{itemize}[leftmargin=1.2em]
-  \item \texttt{sigma} (default \(1.0\), clamped to \([0.05, 50.0]\))
-  \item \texttt{amount} (default \(1.5\), clamped to \([0.0, 5.0]\))
-\end{itemize}
-Kernel size is auto-derived:
+\textbf{Pixel-level transformation (exact):}
+For each output location \(p=(x,y)\), collect all pixels \(q\) in the \(k\times k\) neighborhood centered at \(p\), sum their intensities (or channel values), divide by \(k^2\), and assign:
 \[
-k = 2\cdot \mathrm{round}(3\sigma) + 1
+I'_{c}(x,y)=\frac{1}{k^2}\sum_{i=-r}^{r}\sum_{j=-r}^{r} I_{c}(x+i,y+j),\quad r=\frac{k-1}{2}
 \]
-then forced odd and clamped to \(3 \le k \le 31\).
+So the center pixel is replaced by the plain local average; sharp transitions are reduced because values from both sides of an edge are mixed.
 
-\subsection*{What it is used for}
+\textbf{Application:}
+simple denoising and pre-smoothing before segmentation; useful when speed matters more than edge quality.
+
+\textbf{Compare with:}
+Gaussian gives visually smoother blur; bilateral preserves edges much better.
+
+\subsection{Gaussian Filter}
+\textbf{Theory:}
+\[
+I' = G_{\sigma} * I,\quad
+G(x,y)=\frac{1}{2\pi\sigma^2}\exp\left(-\frac{x^2+y^2}{2\sigma^2}\right)
+\]
+It is a weighted average where nearby pixels contribute more.
+
+\textbf{Pixel-level transformation (exact):}
+For each output pixel \(p\), take a weighted sum of its neighborhood, where weights are Gaussian and normalized to sum to 1:
+\[
+I'_{c}(x,y)=\sum_{i=-r}^{r}\sum_{j=-r}^{r} G_{\sigma}(i,j)\,I_{c}(x+i,y+j)
+\]
+Pixels close to \((x,y)\) get larger weights than far pixels, so smoothing is stronger locally while still blurring edges.
+\textbf{Practical note:} in many implementations, increasing kernel size \(k\) often causes a more obvious increase in blur than small changes in \(\sigma\), because a larger window includes more distant neighbors. In practice, blur appearance is controlled by both \(k\) and \(\sigma\), and they should be tuned together.
+
+\textbf{Application:}
+general denoising, anti-aliasing, and pre-processing for edge detectors.
+
+\textbf{Compare with:}
+stronger quality than mean at similar intent; still blurs edges unlike bilateral.
+
+\subsection{Bilateral Filter}
+\textbf{Theory:}
+\[
+I'(p)=\frac{\sum_{q\in\Omega} w_s(\|p-q\|)\,w_r(|I(p)-I(q)|)\,I(q)}
+{\sum_{q\in\Omega} w_s(\|p-q\|)\,w_r(|I(p)-I(q)|)}
+\]
+with
+\[
+w_s(d)=\exp\!\left(-\frac{d^2}{2\sigma_s^2}\right),\quad
+w_r(\Delta I)=\exp\!\left(-\frac{\Delta I^2}{2\sigma_r^2}\right)
+\]
+It combines spatial closeness and intensity similarity, so cross-edge mixing is reduced.
+
+\textbf{Pixel-level transformation (exact):}
+For each output pixel \(p\), each neighbor \(q\) gets a product weight:
+\[
+w(p,q)=w_s(\|p-q\|)\cdot w_r(|I(p)-I(q)|)
+\]
+Then the output is normalized weighted averaging:
+\[
+I'_{c}(p)=\frac{\sum_{q\in\Omega} w(p,q)\,I_{c}(q)}{\sum_{q\in\Omega} w(p,q)}
+\]
+Thus, a nearby pixel with very different intensity contributes little, which is why bilateral preserves edges better than mean/Gaussian.
+
+\textbf{Application:}
+edge-preserving denoising (portraits, object boundaries, stylized smoothing).
+
+\textbf{Compare with:}
+better edge retention than mean/gaussian; higher computational cost.
+\textbf{Performance comparison note:}
 \begin{itemize}[leftmargin=1.2em]
-  \item Enhancing edges and texture.
-  \item Restoring perceived detail after softening/compression.
-  \item Controlled sharpening without replacing original image structure.
+  \item Bilateral typically performs better than Gaussian for denoising when edge preservation is important.
+  \item Compared with Median, Bilateral often preserves smooth gradients and fine texture better.
+  \item For strong salt-and-pepper (impulse) noise, Median can outperform Bilateral.
+  \item Bilateral is computationally more expensive, so Gaussian/Median may be preferred for real-time speed.
 \end{itemize}
 
-\subsection*{Code methodology and algorithm summary}
-\begin{enumerate}[leftmargin=1.5em]
-  \item Validate BGR image and clamp parameters.
-  \item Build Gaussian kernel from \(\sigma\).
-  \item Blur each channel with convolution.
-  \item Compute \(I + a(I-\text{blur})\).
-  \item Clip and cast to \texttt{uint8}.
-\end{enumerate}
+\subsection{Gamma Filter}
+\textbf{Theory:}
+\[
+V_{\text{out}} = A\,V_{\text{in}}^{\gamma}
+\]
+Gamma correction is a nonlinear luminance mapping used in image/video encoding and decoding.
+In the common case \(A=1\), both \(V_{\text{in}}\) and \(V_{\text{out}}\) are normalized to \([0,1]\).
 
-\begin{lstlisting}[style=pycode]
-sigma = clamp_float(sigma, 0.05, 50.0)
-amount = clamp_float(amount, 0.0, 5.0)
-k = int(2 * round(3 * sigma) + 1)
-k = max(3, min(31, k | 1))
-blur = convolve_bgr(bgr, gaussian_kernel(k, sigma), pad_mode="edge")
-out = bgr.astype(np.float64) + amount * (bgr.astype(np.float64) - blur)
-\end{lstlisting}
+\textbf{Encoding vs decoding interpretation:}
+\begin{itemize}[leftmargin=1.2em]
+  \item \(\gamma<1\): compressive mapping (often called \emph{gamma compression}/encoding),
+  \item \(\gamma>1\): expansive mapping (often called \emph{gamma expansion}/decoding).
+\end{itemize}
 
-\section{Gamma}
-\subsection*{How it works}
-Gamma applies a point-wise power-law intensity transform:
+In this project, for 8-bit intensities \(I\in[0,255]\), the implementation uses:
 \[
 I' = 255\left(\frac{I}{255}\right)^{1/\gamma}
 \]
-implemented as a look-up table (LUT) for speed.
+This keeps the operation point-wise while matching practical display-style control.
 
-\subsection*{Parameters used}
+\textbf{Behavioral intuition:}
 \begin{itemize}[leftmargin=1.2em]
-  \item \texttt{gamma} (default \(1.0\), clamped to \([0.05, 5.0]\))
-\end{itemize}
-Implementation also enforces \(g \ge 10^{-6}\) to avoid divide-by-zero.
-
-\subsection*{What it is used for}
-\begin{itemize}[leftmargin=1.2em]
-  \item Midtone brightness control.
-  \item Tone correction for dark or washed-out images.
-  \item Global intensity remapping without neighborhood operations.
+  \item \(\gamma<1\) brightens midtones more strongly.
+  \item \(\gamma>1\) darkens midtones and preserves highlights.
+  \item \(\gamma=1\) leaves the image unchanged.
 \end{itemize}
 
-\subsection*{Code methodology and algorithm summary}
+\textbf{Pixel-level transformation (exact):}
+Each pixel is transformed independently (no neighborhood):
+\[
+I'_{c}(x,y)=255\left(\frac{I_{c}(x,y)}{255}\right)^{1/\gamma}
+\]
+\textbf{Notation:} \(I_{c}(x,y)\) is the input pixel intensity at position \((x,y)\) for channel \(c\) (typically in \([0,255]\) for 8-bit images), and \(I'_{c}(x,y)\) is the output intensity after gamma correction.
+\textbf{Why \(0..255\):} the implementation uses 8-bit image storage (\texttt{uint8}), so each channel has 256 discrete levels from 0 to 255. Therefore formulas normalize by dividing by 255 and convert back by multiplying by 255. For other bit depths, the scale changes (e.g., 16-bit uses \(0..65535\)).
+
+Implementation-wise, this is usually done via LUT:
+\[
+\text{LUT}[i]=255\left(\frac{i}{255}\right)^{1/\gamma},\quad I'_{c}(x,y)=\text{LUT}[I_{c}(x,y)]
+\]
+So every channel value is remapped by the same nonlinear curve.
+
+\textbf{Application:}
+midtone correction, global brightening/darkening, display-oriented tone adjustment.
+
+\textbf{Compare with:}
+less aggressive than dodge; unlike smoothing filters, it does not denoise or blur.
+
+\subsection{Dodge Filter}
+\textbf{Theory (project-style mapping):}
+\[
+I' \approx \frac{255\,I}{255-sI}
+\]
+with strength \(s\in[0,1)\). Bright values are amplified more strongly than dark values.
+\textbf{Dodge strength interpretation:}
+\begin{itemize}[leftmargin=1.2em]
+  \item \(s\) is the parameter controlling how aggressively pixels are brightened.
+  \item Higher \(s\) makes the denominator \(255-sI\) smaller for bright pixels, so brightening becomes much stronger.
+  \item Lower \(s\) gives a gentler effect.
+  \item \(s=0\) gives almost no change.
+  \item Near the upper practical limit (e.g., \(s\approx 0.95\)), highlights can quickly saturate to white (clipping).
+\end{itemize}
+
+\textbf{Pixel-level transformation (exact):}
+Each pixel/channel is transformed independently by a rational brightening function:
+\[
+I'_{c}(x,y)=\mathrm{clip}\!\left(\frac{255\,I_{c}(x,y)}{\max(255-s\,I_{c}(x,y),1)}\right)
+\]
+When \(I_c(x,y)\) is high, denominator decreases and output rises rapidly toward white. When \(I_c(x,y)\) is low, change is smaller.
+
+\textbf{Application:}
+highlight enhancement, artistic glow-like brightening, sketch-like stylization.
+\textbf{Historical note:} The name ``Dodge'' comes from traditional darkroom photography, where it meant making selected regions of the light-sensitive paper ``dodge'' (avoid) light from the enlarger, so those regions developed brighter.
+
+\textbf{Compare with:}
+more aggressive than gamma in highlights; unlike bloom, dodge is point-wise (no spatial blur).
+
+\section{Comparison Section (Visual Results)}
+This section maps the collected report images to the relevant filters and highlights practical behavior differences.
+
+\subsection{Smoothing / Denoising Comparison}
+\textbf{Gaussian (kernel and blur behavior):}
+\begin{center}
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian kernel -small sigma.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian kernel larger sigma.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 1- kernel.jpg}
+
+\vspace{0.5em}
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 1.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 2.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur no smooth edges.jpg}
+\end{center}
+
+\textbf{Median and mean-context comparison (uniform smoothing vs edge/detail trade-off):}
+\begin{center}
+\img[width=0.31\textwidth]{xotiena00reportimages/median lower kernel.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/median-kernel 9x9.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/median noise removal.jpg}
+
+\vspace{0.5em}
+\img[width=0.48\textwidth]{xotiena00reportimages/gaussian and median comparision.jpg}
+\hfill
+\img[width=0.48\textwidth]{xotiena00reportimages/gaussian nosie removel.jpg}
+\end{center}
+
+\textbf{Bilateral (edge preservation):}
+\begin{center}
+\img[width=0.48\textwidth]{xotiena00reportimages/bilateral -edge preservations.jpg}
+\hfill
+\img[width=0.48\textwidth]{xotiena00reportimages/bilatera -edge preservations kernel.jpg}
+\end{center}
+
+\textbf{Interpretation:}
+\begin{itemize}[leftmargin=1.2em]
+  \item Gaussian and mean-style smoothing suppress noise but can soften boundaries.
+  \item Median better handles impulse noise but may flatten small textures.
+  \item Bilateral keeps stronger edges while still reducing noise in flatter regions.
+\end{itemize}
+
+\subsection{Tone / Brightness Comparison}
+\textbf{Gamma progression:}
+\begin{center}
+\img[width=0.19\textwidth]{xotiena00reportimages/gamma1.jpg}
+\hfill
+\img[width=0.19\textwidth]{xotiena00reportimages/gamma2.jpg}
+\hfill
+\img[width=0.19\textwidth]{xotiena00reportimages/gamma3.jpg}
+\hfill
+\img[width=0.19\textwidth]{xotiena00reportimages/gamma5.jpg}
+\hfill
+\img[width=0.19\textwidth]{xotiena00reportimages/gamma6.jpg}
+\end{center}
+
+\textbf{Dodge progression and gamma-vs-dodge extremes:}
+\begin{center}
+\img[width=0.24\textwidth]{xotiena00reportimages/dodge1.jpg}
+\hfill
+\img[width=0.24\textwidth]{xotiena00reportimages/dodge2.jpg}
+\hfill
+\img[width=0.24\textwidth]{xotiena00reportimages/dodge3.jpg}
+\hfill
+\img[width=0.24\textwidth]{xotiena00reportimages/dodge-failes on eyes reveal.jpg}
+
+\vspace{0.5em}
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-lower values.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-higher values.jpg}
+\hfill
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-xtremehighjpg.jpg}
+\end{center}
+
+\textbf{Interpretation:}
+\begin{itemize}[leftmargin=1.2em]
+  \item Gamma produces controlled global tone remapping, especially in midtones.
+  \item Dodge is more aggressive in highlights and can saturate bright facial regions.
+  \item Extreme dodge strength can introduce unnatural highlight clipping artifacts.
+\end{itemize}
+
+\section{Computational Power and Complexity}
+
+\subsection{Asymptotic Cost per Pixel}
+Let \(k\) be kernel width (window \(k\times k\)).
+\begin{itemize}[leftmargin=1.2em]
+  \item Mean: \(O(k^2)\) naive, can be reduced using integral images.
+  \item Gaussian: \(O(k^2)\) for direct 2D convolution, or \(O(2k)\) with separable implementation.
+  \item Bilateral: \(O(k^2)\) with expensive nonlinear weights per neighbor.
+  \item Gamma: \(O(1)\) with LUT lookup.
+  \item Dodge: \(O(1)\) per pixel arithmetic.
+\end{itemize}
+
+\subsection{Practical Runtime Ranking}
+Typical CPU runtime (fastest to slowest):
+\[
+\text{Gamma} \approx \text{Dodge} \ll \text{Mean} \lesssim \text{Gaussian} \ll \text{Bilateral}
+\]
+Actual order depends on implementation backend (NumPy loops vs vectorized/OpenCV C++ kernels).
+
+\section{Implementation Methodology}
+\subsection{Shared pipeline}
 \begin{enumerate}[leftmargin=1.5em]
-  \item Validate image and clamp \(\gamma\).
-  \item Precompute 256-entry LUT from power law.
-  \item Apply LUT by direct indexing (\texttt{table[bgr]}).
+  \item normalize input to BGR \texttt{uint8},
+  \item clamp parameters to safe ranges,
+  \item compute in floating-point where needed,
+  \item clip and cast back to \([0,255]\) \texttt{uint8}.
 \end{enumerate}
 
+\subsection{Filter-specific implementation notes}
+\begin{itemize}[leftmargin=1.2em]
+  \item \textbf{Mean:} box kernel convolution (\texttt{1/k\^{}2} weights); good baseline.
+  \item \textbf{Gaussian:} generated Gaussian kernel; prefer separable implementation for speed.
+  \item \textbf{Bilateral:} requires both spatial and range Gaussian weights; use optimized library path when possible for interactive UI.
+  \item \textbf{Gamma:} precompute 256-entry LUT and apply via indexing.
+  \item \textbf{Dodge:} stable denominator handling and clamping are required to avoid overflow artifacts.
+\end{itemize}
+
+\section{Algorithm Summaries}
+
+\subsection{Smoothing/Denoising}
 \begin{lstlisting}[style=pycode]
-g = max(clamp_float(gamma, 0.05, 5.0), 1e-6)
-inv = 1.0 / g
-table = ((np.arange(256, dtype=np.float64) / 255.0) ** inv * 255.0)
-table = np.clip(np.round(table), 0, 255).astype(np.uint8)
-out = table[bgr]
+# Mean
+out = convolve(image, ones(k,k)/(k*k))
+
+# Gaussian
+kernel = gaussian_kernel(k, sigma)
+out = convolve(image, kernel)   # or separable 1D passes
+
+# Bilateral
+for each pixel p:
+    for q in kxk neighborhood:
+        w = spatial_weight(p,q,sigma_space) * range_weight(I[p], I[q], sigma_color)
+    out[p] = weighted_sum / weight_sum
 \end{lstlisting}
 
-\section{Relief Emboss}
-\subsection*{How it works}
-Relief emboss converts to grayscale, applies a directional emboss kernel, then adds a gray bias:
-\[
-E = I_g * K_{\text{emboss}}, \quad I' = \mathrm{clip}(E + 128)
-\]
-The \(+128\) shift centers values around neutral gray, making raised/sunken shading visible.
-
-\subsection*{Parameters used}
-\begin{itemize}[leftmargin=1.2em]
-  \item \texttt{strength} (default \(1.0\), clamped to \([0.1, 4.0]\))
-\end{itemize}
-Kernel:
-\[
-K =
-\begin{bmatrix}
--2 & -1 & 0\\
--1 & 1 & 1\\
-0 & 1 & 2
-\end{bmatrix}\cdot \texttt{strength}
-\]
-
-\subsection*{What it is used for}
-\begin{itemize}[leftmargin=1.2em]
-  \item Stylized artistic rendering.
-  \item Emphasizing directional surface-like texture.
-  \item Producing pseudo-3D relief effect from 2D intensity changes.
-\end{itemize}
-
-\subsection*{Code methodology and algorithm summary}
-\begin{enumerate}[leftmargin=1.5em]
-  \item Validate image, clamp strength.
-  \item Convert BGR to grayscale luminance.
-  \item Convolve with emboss kernel (edge padding).
-  \item Add \(128\), clip to \([0,255]\).
-  \item Replicate gray channel back to BGR.
-\end{enumerate}
-
+\subsection{Tone/Brightness}
 \begin{lstlisting}[style=pycode]
-s = clamp_float(strength, 0.1, 4.0)
-g = to_gray_u8(bgr).astype(np.float64)
-kernel = np.array([[-2., -1., 0.], [-1., 1., 1.], [0., 1., 2.]]) * s
-emb = convolve_gray(g, kernel, pad_mode="edge") + 128.0
-out = np.clip(np.round(emb), 0, 255).astype(np.uint8)
+# Gamma (LUT)
+lut[i] = round(((i/255.0)**(1.0/gamma))*255)
+out = lut[image]
+
+# Dodge
+denom = 255 - strength*image
+out = clip((image*255) / max(denom, 1))
 \end{lstlisting}
-
-\section{Bloom}
-\subsection*{How it works}
-Bloom creates glow around bright regions:
-\[
-M(x)=\mathbf{1}_{I_g(x)\ge T}, \quad B=I\odot M, \quad G=G_{\sigma}*B, \quad I' = I+\alpha G
-\]
-where \(T\) is brightness threshold and \(\alpha\) is glow intensity.
-
-\subsection*{Parameters used}
-\begin{itemize}[leftmargin=1.2em]
-  \item \texttt{threshold} (default \(180\), clamped to \([0,255]\))
-  \item \texttt{sigma} (default \(2.5\), clamped to \([0.1,20.0]\))
-  \item \texttt{intensity} (default \(0.7\), clamped to \([0.0,3.0]\))
-\end{itemize}
-Gaussian kernel size is derived from \(\sigma\), forced odd, and clamped to \(3\ldots51\).
-
-\subsection*{What it is used for}
-\begin{itemize}[leftmargin=1.2em]
-  \item Cinematic glow around highlights.
-  \item Emphasizing bright sources (lights, reflections).
-  \item Stylized soft highlight enhancement.
-\end{itemize}
-
-\subsection*{Code methodology and algorithm summary}
-\begin{enumerate}[leftmargin=1.5em]
-  \item Validate image and clamp parameters.
-  \item Convert to grayscale for threshold mask.
-  \item Keep only bright pixels via binary mask.
-  \item Blur masked bright layer with Gaussian convolution.
-  \item Add scaled glow to original image and clip.
-\end{enumerate}
-
-\begin{lstlisting}[style=pycode]
-t = clamp_int(threshold, 0, 255)
-s = clamp_float(sigma, 0.1, 20.0)
-a = clamp_float(intensity, 0.0, 3.0)
-g = to_gray_u8(bgr)
-bright_mask = (g >= t).astype(np.float64)[:, :, None]
-bright = bgr.astype(np.float64) * bright_mask
-glow = convolve_bgr(bright, gaussian_kernel(k, s), pad_mode="edge")
-out = bgr.astype(np.float64) + a * glow
-\end{lstlisting}
-
-\section{Binary Threshold}
-\subsection*{How it works}
-Binary threshold maps luminance to two classes:
-\[
-I'(x)=
-\begin{cases}
-255, & I_g(x)\ge T\\
-0, & I_g(x)<T
-\end{cases}
-\]
-This is a hard segmentation by global threshold \(T\).
-
-\subsection*{Parameters used}
-\begin{itemize}[leftmargin=1.2em]
-  \item \texttt{thresh} (default \(127\), clamped to \([0,255]\))
-\end{itemize}
-
-\subsection*{What it is used for}
-\begin{itemize}[leftmargin=1.2em]
-  \item Foreground-background separation in simple scenes.
-  \item Preprocessing for morphology/shape analysis.
-  \item High-contrast stylized black/white output.
-\end{itemize}
-
-\subsection*{Code methodology and algorithm summary}
-\begin{enumerate}[leftmargin=1.5em]
-  \item Validate image and clamp threshold.
-  \item Convert BGR to grayscale luminance.
-  \item Apply per-pixel comparison with \(T\).
-  \item Convert resulting gray mask to 3-channel BGR.
-\end{enumerate}
-
-\begin{lstlisting}[style=pycode]
-t = clamp_int(thresh, 0, 255)
-g = to_gray_u8(bgr)
-bw = np.where(g >= t, 255, 0).astype(np.uint8)
-out = to_bgr_from_gray(bw)
-\end{lstlisting}
-
-\section{Overall Algorithmic Notes}
-\begin{itemize}[leftmargin=1.2em]
-  \item \textbf{Linear neighborhood filters}: Unsharp Mask and Relief Emboss use convolution kernels.
-  \item \textbf{Point-wise intensity mapping}: Gamma and Binary Threshold operate independently per pixel once luminance is computed.
-  \item \textbf{Hybrid compositing}: Bloom combines segmentation (threshold), convolution (blur), and additive blending.
-  \item \textbf{Numerical stability}: project-wide clamping and \texttt{uint8} clipping enforce safe image bounds.
-\end{itemize}
 
 \section{Conclusion}
-The five filters cover complementary operations: sharpening, tone mapping, stylization, glow synthesis, and segmentation. The implementation is consistent and modular: shared validation, explicit parameter bounds, and clear NumPy-based algorithm design. This makes behavior predictable for both interactive use and further extension in the FaceFiltering framework.
+The two groups serve different goals. Mean, Gaussian, and Bilateral are neighborhood-based
+denoisers with a quality-speed trade-off where bilateral gives best edge preservation at the
+highest cost. Gamma and Dodge are point-wise tone operators: gamma is controlled global tone
+correction, while dodge is an aggressive highlight boost. For real-time systems, LUT-based
+gamma/dodge are cheapest; for denoising quality, choose bilateral when computational budget allows,
+otherwise use Gaussian as the standard compromise.
 
 \end{document}
