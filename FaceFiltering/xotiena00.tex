@@ -25,26 +25,30 @@
   stringstyle=\color{orange!50!black},
   showstringspaces=false,
   breaklines=true,
-  frame=single
+  frame=single,
+  aboveskip=4pt,
+  belowskip=4pt
 }
 \newcommand{\img}[2][]{\includegraphics[#1]{\detokenize{#2}}}
-
-\title{Filter Theory and Implementation Report\\\large xotiena00}
-\author{FaceFiltering Project Analysis}
-\date{\today}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+\setlength{\abovedisplayskip}{6pt}
+\setlength{\belowdisplayskip}{6pt}
+\setlength{\abovedisplayshortskip}{4pt}
+\setlength{\belowdisplayshortskip}{4pt}
+\setlength{\textfloatsep}{8pt}
+\renewcommand{\arraystretch}{0.98}
+\setlist{nosep}
 
 \begin{document}
-\maketitle
-
-\section{Scope}
-This report redesigns \texttt{xotiena00} for the requested filter groups:
-\begin{itemize}[leftmargin=1.2em]
-  \item \textbf{Smoothing / Denoising}: Bilateral, Mean, Gaussian
-  \item \textbf{Tone / Brightness Adjustment}: Gamma, Dodge
-\end{itemize}
-
-The report compares and classifies filters, summarizes theory and practical application,
-and discusses computational cost and implementation strategy.
+\begin{center}
+{\LARGE\bfseries Creative Glow \& Tone/Brightness Filters\par}
+\vspace{2pt}
+{\large xotiena00\par}
+\vspace{2pt}
+{May 9, 2026\par}
+\end{center}
+\vspace{6pt}
 
 \section{Classification and Comparison}
 \begin{center}
@@ -52,9 +56,8 @@ and discusses computational cost and implementation strategy.
 \toprule
 \textbf{Filter} & \textbf{Group} & \textbf{Methodology} & \textbf{Linear?} & \textbf{Edge Preservation} \\
 \midrule
-Mean & Smooth/Denoise & Spatial neighborhood averaging & Yes & Low \\
-Gaussian & Smooth/Denoise & Spatial convolution (Gaussian kernel) & Yes & Low--Medium \\
-Bilateral & Smooth/Denoise & Nonlinear spatial+range weighting & No & High \\
+Bloom & Creative Glow & Bright-mask + blur + additive blend & Hybrid & Medium \\
+Orton effect & Creative Glow & Blur + screen blend + mix & Hybrid & Medium \\
 Gamma & Tone/Brightness & Point-wise power-law mapping (LUT) & No & N/A \\
 Dodge & Tone/Brightness & Point-wise nonlinear brightening curve & No & N/A \\
 \bottomrule
@@ -63,320 +66,221 @@ Dodge & Tone/Brightness & Point-wise nonlinear brightening curve & No & N/A \\
 
 \section{Theory and Application}
 
-\subsection{Mean Filter}
-\textbf{Theory:}
+\subsection{Bloom}
+\textbf{Core model}
 \[
-I'(p)=\frac{1}{|\Omega|}\sum_{q\in\Omega} I(q)
+M(x)=\mathbf{1}_{I_g(x)\ge T},\quad B=I\odot M,\quad G=G_{\sigma}*B,\quad I'=I+\alpha G
 \]
-It replaces each pixel by the arithmetic mean of a local window \(\Omega\).
+\textbf{Notation} \(T\): threshold, \(\sigma\): blur spread, \(\alpha\): glow strength, \(I'\): output.
 
-\textbf{Pixel-level transformation (exact):}
-For each output location \(p=(x,y)\), collect all pixels \(q\) in the \(k\times k\) neighborhood centered at \(p\), sum their intensities (or channel values), divide by \(k^2\), and assign:
+\textbf{Pixel-level transformation}
 \[
-I'_{c}(x,y)=\frac{1}{k^2}\sum_{i=-r}^{r}\sum_{j=-r}^{r} I_{c}(x+i,y+j),\quad r=\frac{k-1}{2}
+I'_c(x,y)=I_c(x,y)+\alpha\sum_{i=-r}^{r}\sum_{j=-r}^{r}G_{\sigma}(i,j)\,B_c(x+i,y+j)
 \]
-So the center pixel is replaced by the plain local average; sharp transitions are reduced because values from both sides of an edge are mixed.
+Only bright pixels feed the glow layer; high \(T\) can suppress bloom even with high \(\alpha\).
 
-\textbf{Application:}
-simple denoising and pre-smoothing before segmentation; useful when speed matters more than edge quality.
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+bright = image * (gray >= T)
+glow = convolve(bright, gaussian_kernel(k, sigma))
+out = clip(image + alpha * glow)
+\end{lstlisting}
+\textbf{Implementation note} Convert to BGR \texttt{uint8}, clamp \(T,\alpha,\sigma\) to safe ranges, run blur/blend in float, then clip and cast back to \([0,255]\).
 
-\textbf{Compare with:}
-Gaussian gives visually smoother blur; bilateral preserves edges much better.
+\textbf{Experiment -- Bloom}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom3.jpg} \\
+\scriptsize $T=24,\ \alpha=0.05,\ \sigma=0.5$ &
+\scriptsize $T=21,\ \alpha=0.65,\ \sigma=1.2$ &
+\scriptsize $T=144,\ \alpha=1.8,\ \sigma=11.3$ \\
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom1graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom2graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloom3graph.jpg}
+\end{tabular}
+\end{center}
 
-\subsection{Gaussian Filter}
-\textbf{Theory:}
+\textbf{Use} cinematic highlight glow and light-source emphasis.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/bloomsample1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloomsample2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/bloomsample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} stronger spatial glow than gamma/dodge.
+\textbf{Cost note} Per-pixel asymptotic cost is \(O(k^2)\) because Bloom applies Gaussian blur on a \(k\times k\) neighborhood.
+
+\subsection{Orton Effect}
+\textbf{Core model}
 \[
-I' = G_{\sigma} * I,\quad
-G(x,y)=\frac{1}{2\pi\sigma^2}\exp\left(-\frac{x^2+y^2}{2\sigma^2}\right)
+S = 255 - \frac{(255-I)(255-B)}{255},\quad B=G_{\sigma}*I,\quad I'=(1-\alpha)I+\alpha S
 \]
-It is a weighted average where nearby pixels contribute more.
+\textbf{Notation} \(B\): blurred image, \(S\): screen blend, \(\sigma\): blur spread, \(\alpha\): mix strength.
 
-\textbf{Pixel-level transformation (exact):}
-For each output pixel \(p\), take a weighted sum of its neighborhood, where weights are Gaussian and normalized to sum to 1:
+\textbf{Pixel-level transformation}
 \[
-I'_{c}(x,y)=\sum_{i=-r}^{r}\sum_{j=-r}^{r} G_{\sigma}(i,j)\,I_{c}(x+i,y+j)
+\begin{aligned}
+B_c(x,y)&=\sum_{i=-r}^{r}\sum_{j=-r}^{r}G_{\sigma}(i,j)\,I_c(x+i,y+j),\\
+S_c(x,y)&=255-\frac{(255-I_c(x,y))(255-B_c(x,y))}{255},\\
+I'_c(x,y)&=(1-\alpha)I_c(x,y)+\alpha S_c(x,y).
+\end{aligned}
 \]
-Pixels close to \((x,y)\) get larger weights than far pixels, so smoothing is stronger locally while still blurring edges.
-\textbf{Practical note:} in many implementations, increasing kernel size \(k\) often causes a more obvious increase in blur than small changes in \(\sigma\), because a larger window includes more distant neighbors. In practice, blur appearance is controlled by both \(k\) and \(\sigma\), and they should be tuned together.
 
-\textbf{Application:}
-general denoising, anti-aliasing, and pre-processing for edge detectors.
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+blur = convolve(image, gaussian_kernel(k, sigma))
+screen = 255 - ((255-image)*(255-blur)/255)
+out = clip((1-alpha)*image + alpha*screen)
+\end{lstlisting}
+\textbf{Implementation note} Convert to BGR \texttt{uint8}, clamp \(\alpha,\sigma\), compute blur and screen blend in float, then clip and cast to \texttt{uint8}.
 
-\textbf{Compare with:}
-stronger quality than mean at similar intent; still blurs edges unlike bilateral.
+\textbf{Experiment -- Orton}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/orton1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/orton2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/orton3.jpg} \\
+\scriptsize $\alpha=0.15,\ \sigma=0.1$ &
+\scriptsize $\alpha=0.45,\ \sigma=8.5$ &
+\scriptsize $\alpha=1.0,\ \sigma=19.1$ \\
+\img[width=0.31\textwidth]{xotiena00reportimages/orton1graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/orton2graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/orton3graph3.jpg}
+\end{tabular}
+\end{center}
 
-\subsection{Bilateral Filter}
-\textbf{Theory:}
-\[
-I'(p)=\frac{\sum_{q\in\Omega} w_s(\|p-q\|)\,w_r(|I(p)-I(q)|)\,I(q)}
-{\sum_{q\in\Omega} w_s(\|p-q\|)\,w_r(|I(p)-I(q)|)}
-\]
-with
-\[
-w_s(d)=\exp\!\left(-\frac{d^2}{2\sigma_s^2}\right),\quad
-w_r(\Delta I)=\exp\!\left(-\frac{\Delta I^2}{2\sigma_r^2}\right)
-\]
-It combines spatial closeness and intensity similarity, so cross-edge mixing is reduced.
-
-\textbf{Pixel-level transformation (exact):}
-For each output pixel \(p\), each neighbor \(q\) gets a product weight:
-\[
-w(p,q)=w_s(\|p-q\|)\cdot w_r(|I(p)-I(q)|)
-\]
-Then the output is normalized weighted averaging:
-\[
-I'_{c}(p)=\frac{\sum_{q\in\Omega} w(p,q)\,I_{c}(q)}{\sum_{q\in\Omega} w(p,q)}
-\]
-Thus, a nearby pixel with very different intensity contributes little, which is why bilateral preserves edges better than mean/Gaussian.
-
-\textbf{Application:}
-edge-preserving denoising (portraits, object boundaries, stylized smoothing).
-
-\textbf{Compare with:}
-better edge retention than mean/gaussian; higher computational cost.
-\textbf{Performance comparison note:}
-\begin{itemize}[leftmargin=1.2em]
-  \item Bilateral typically performs better than Gaussian for denoising when edge preservation is important.
-  \item Compared with Median, Bilateral often preserves smooth gradients and fine texture better.
-  \item For strong salt-and-pepper (impulse) noise, Median can outperform Bilateral.
-  \item Bilateral is computationally more expensive, so Gaussian/Median may be preferred for real-time speed.
-\end{itemize}
+\textbf{Use} soft-focus portrait look with reduced micro-contrast.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/ortonsample1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/ortonsample2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/ortonsample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} gentler and more diffuse than bloom.
+\textbf{Cost note} Per-pixel asymptotic cost is \(O(k^2)\) due to Gaussian blur plus point-wise blend.
 
 \subsection{Gamma Filter}
-\textbf{Theory:}
+\textbf{Core model}
 \[
-V_{\text{out}} = A\,V_{\text{in}}^{\gamma}
-\]
-Gamma correction is a nonlinear luminance mapping used in image/video encoding and decoding.
-In the common case \(A=1\), both \(V_{\text{in}}\) and \(V_{\text{out}}\) are normalized to \([0,1]\).
-
-\textbf{Encoding vs decoding interpretation:}
-\begin{itemize}[leftmargin=1.2em]
-  \item \(\gamma<1\): compressive mapping (often called \emph{gamma compression}/encoding),
-  \item \(\gamma>1\): expansive mapping (often called \emph{gamma expansion}/decoding).
-\end{itemize}
-
-In this project, for 8-bit intensities \(I\in[0,255]\), the implementation uses:
-\[
+V_{\text{out}} = A\,V_{\text{in}}^{\gamma},\qquad
 I' = 255\left(\frac{I}{255}\right)^{1/\gamma}
 \]
-This keeps the operation point-wise while matching practical display-style control.
+\textbf{Notation} \(\gamma\): tone-curve exponent, \(A\): scale (usually 1), \(I\in[0,255]\): 8-bit input.
+\textbf{Why \(0..255\)} 8-bit \texttt{uint8} images have 256 levels; divide by 255 to normalize to \([0,1]\), then multiply by 255 to return.
 
-\textbf{Behavioral intuition:}
-\begin{itemize}[leftmargin=1.2em]
-  \item \(\gamma<1\) brightens midtones more strongly.
-  \item \(\gamma>1\) darkens midtones and preserves highlights.
-  \item \(\gamma=1\) leaves the image unchanged.
-\end{itemize}
-
-\textbf{Pixel-level transformation (exact):}
-Each pixel is transformed independently (no neighborhood):
+\textbf{Pixel-level transformation}
 \[
 I'_{c}(x,y)=255\left(\frac{I_{c}(x,y)}{255}\right)^{1/\gamma}
 \]
-\textbf{Notation:} \(I_{c}(x,y)\) is the input pixel intensity at position \((x,y)\) for channel \(c\) (typically in \([0,255]\) for 8-bit images), and \(I'_{c}(x,y)\) is the output intensity after gamma correction.
-\textbf{Why \(0..255\):} the implementation uses 8-bit image storage (\texttt{uint8}), so each channel has 256 discrete levels from 0 to 255. Therefore formulas normalize by dividing by 255 and convert back by multiplying by 255. For other bit depths, the scale changes (e.g., 16-bit uses \(0..65535\)).
+\(\gamma<1\): brighter midtones, \(\gamma>1\): darker midtones.
 
-Implementation-wise, this is usually done via LUT:
-\[
-\text{LUT}[i]=255\left(\frac{i}{255}\right)^{1/\gamma},\quad I'_{c}(x,y)=\text{LUT}[I_{c}(x,y)]
-\]
-So every channel value is remapped by the same nonlinear curve.
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+lut[i] = round(((i/255.0)**(1.0/gamma))*255)
+out = lut[image]
+\end{lstlisting}
+\textbf{Implementation note} Convert to BGR \texttt{uint8}, clamp \(\gamma\), build a 256-entry LUT in float, then apply LUT and keep output in \([0,255]\) \texttt{uint8}.
 
-\textbf{Application:}
-midtone correction, global brightening/darkening, display-oriented tone adjustment.
+\textbf{Experiment -- Gamma}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma3.jpg} \\
+\scriptsize $\gamma=0.2$ & \scriptsize $\gamma=1.0$ & \scriptsize $\gamma=1.95$ \\
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma1graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma2graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gamma3graph.jpg}
+\end{tabular}
+\end{center}
 
-\textbf{Compare with:}
-less aggressive than dodge; unlike smoothing filters, it does not denoise or blur.
+\textbf{Use} controlled global tone and midtone correction.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/gammasample1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gammasample2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/gammasample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} smoother and less aggressive than dodge.
+\textbf{Cost note} Per-pixel asymptotic cost is \(O(1)\) when implemented with LUT lookup.
 
 \subsection{Dodge Filter}
-\textbf{Theory (project-style mapping):}
+\textbf{Core model}
 \[
 I' \approx \frac{255\,I}{255-sI}
 \]
-with strength \(s\in[0,1)\). Bright values are amplified more strongly than dark values.
-\textbf{Dodge strength interpretation:}
-\begin{itemize}[leftmargin=1.2em]
-  \item \(s\) is the parameter controlling how aggressively pixels are brightened.
-  \item Higher \(s\) makes the denominator \(255-sI\) smaller for bright pixels, so brightening becomes much stronger.
-  \item Lower \(s\) gives a gentler effect.
-  \item \(s=0\) gives almost no change.
-  \item Near the upper practical limit (e.g., \(s\approx 0.95\)), highlights can quickly saturate to white (clipping).
-\end{itemize}
+\textbf{Notation} \(s\): dodge strength, \(I\): input intensity, \(I'\): output intensity.
 
-\textbf{Pixel-level transformation (exact):}
-Each pixel/channel is transformed independently by a rational brightening function:
+\textbf{Pixel-level transformation}
 \[
 I'_{c}(x,y)=\mathrm{clip}\!\left(\frac{255\,I_{c}(x,y)}{\max(255-s\,I_{c}(x,y),1)}\right)
 \]
-When \(I_c(x,y)\) is high, denominator decreases and output rises rapidly toward white. When \(I_c(x,y)\) is low, change is smaller.
+Higher \(s\) strongly boosts highlights and may clip to white.
 
-\textbf{Application:}
-highlight enhancement, artistic glow-like brightening, sketch-like stylization.
-\textbf{Historical note:} The name ``Dodge'' comes from traditional darkroom photography, where it meant making selected regions of the light-sensitive paper ``dodge'' (avoid) light from the enlarger, so those regions developed brighter.
-
-\textbf{Compare with:}
-more aggressive than gamma in highlights; unlike bloom, dodge is point-wise (no spatial blur).
-
-\section{Comparison Section (Visual Results)}
-This section maps the collected report images to the relevant filters and highlights practical behavior differences.
-
-\subsection{Smoothing / Denoising Comparison}
-\textbf{Gaussian (kernel and blur behavior):}
-\begin{center}
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian kernel -small sigma.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian kernel larger sigma.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 1- kernel.jpg}
-
-\vspace{0.5em}
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 1.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur 2.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/gaussian blur no smooth edges.jpg}
-\end{center}
-
-\textbf{Median and mean-context comparison (uniform smoothing vs edge/detail trade-off):}
-\begin{center}
-\img[width=0.31\textwidth]{xotiena00reportimages/median lower kernel.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/median-kernel 9x9.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/median noise removal.jpg}
-
-\vspace{0.5em}
-\img[width=0.48\textwidth]{xotiena00reportimages/gaussian and median comparision.jpg}
-\hfill
-\img[width=0.48\textwidth]{xotiena00reportimages/gaussian nosie removel.jpg}
-\end{center}
-
-\textbf{Bilateral (edge preservation):}
-\begin{center}
-\img[width=0.48\textwidth]{xotiena00reportimages/bilateral -edge preservations.jpg}
-\hfill
-\img[width=0.48\textwidth]{xotiena00reportimages/bilatera -edge preservations kernel.jpg}
-\end{center}
-
-\textbf{Interpretation:}
-\begin{itemize}[leftmargin=1.2em]
-  \item Gaussian and mean-style smoothing suppress noise but can soften boundaries.
-  \item Median better handles impulse noise but may flatten small textures.
-  \item Bilateral keeps stronger edges while still reducing noise in flatter regions.
-\end{itemize}
-
-\subsection{Tone / Brightness Comparison}
-\textbf{Gamma progression:}
-\begin{center}
-\img[width=0.19\textwidth]{xotiena00reportimages/gamma1.jpg}
-\hfill
-\img[width=0.19\textwidth]{xotiena00reportimages/gamma2.jpg}
-\hfill
-\img[width=0.19\textwidth]{xotiena00reportimages/gamma3.jpg}
-\hfill
-\img[width=0.19\textwidth]{xotiena00reportimages/gamma5.jpg}
-\hfill
-\img[width=0.19\textwidth]{xotiena00reportimages/gamma6.jpg}
-\end{center}
-
-\textbf{Dodge progression and gamma-vs-dodge extremes:}
-\begin{center}
-\img[width=0.24\textwidth]{xotiena00reportimages/dodge1.jpg}
-\hfill
-\img[width=0.24\textwidth]{xotiena00reportimages/dodge2.jpg}
-\hfill
-\img[width=0.24\textwidth]{xotiena00reportimages/dodge3.jpg}
-\hfill
-\img[width=0.24\textwidth]{xotiena00reportimages/dodge-failes on eyes reveal.jpg}
-
-\vspace{0.5em}
-\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-lower values.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-higher values.jpg}
-\hfill
-\img[width=0.31\textwidth]{xotiena00reportimages/dodge-gamma-xtremehighjpg.jpg}
-\end{center}
-
-\textbf{Interpretation:}
-\begin{itemize}[leftmargin=1.2em]
-  \item Gamma produces controlled global tone remapping, especially in midtones.
-  \item Dodge is more aggressive in highlights and can saturate bright facial regions.
-  \item Extreme dodge strength can introduce unnatural highlight clipping artifacts.
-\end{itemize}
-
-\section{Computational Power and Complexity}
-
-\subsection{Asymptotic Cost per Pixel}
-Let \(k\) be kernel width (window \(k\times k\)).
-\begin{itemize}[leftmargin=1.2em]
-  \item Mean: \(O(k^2)\) naive, can be reduced using integral images.
-  \item Gaussian: \(O(k^2)\) for direct 2D convolution, or \(O(2k)\) with separable implementation.
-  \item Bilateral: \(O(k^2)\) with expensive nonlinear weights per neighbor.
-  \item Gamma: \(O(1)\) with LUT lookup.
-  \item Dodge: \(O(1)\) per pixel arithmetic.
-\end{itemize}
-
-\subsection{Practical Runtime Ranking}
-Typical CPU runtime (fastest to slowest):
-\[
-\text{Gamma} \approx \text{Dodge} \ll \text{Mean} \lesssim \text{Gaussian} \ll \text{Bilateral}
-\]
-Actual order depends on implementation backend (NumPy loops vs vectorized/OpenCV C++ kernels).
-
-\section{Implementation Methodology}
-\subsection{Shared pipeline}
-\begin{enumerate}[leftmargin=1.5em]
-  \item normalize input to BGR \texttt{uint8},
-  \item clamp parameters to safe ranges,
-  \item compute in floating-point where needed,
-  \item clip and cast back to \([0,255]\) \texttt{uint8}.
-\end{enumerate}
-
-\subsection{Filter-specific implementation notes}
-\begin{itemize}[leftmargin=1.2em]
-  \item \textbf{Mean:} box kernel convolution (\texttt{1/k\^{}2} weights); good baseline.
-  \item \textbf{Gaussian:} generated Gaussian kernel; prefer separable implementation for speed.
-  \item \textbf{Bilateral:} requires both spatial and range Gaussian weights; use optimized library path when possible for interactive UI.
-  \item \textbf{Gamma:} precompute 256-entry LUT and apply via indexing.
-  \item \textbf{Dodge:} stable denominator handling and clamping are required to avoid overflow artifacts.
-\end{itemize}
-
-\section{Algorithm Summaries}
-
-\subsection{Smoothing/Denoising}
+\textbf{Algorithm (implementation)}
 \begin{lstlisting}[style=pycode]
-# Mean
-out = convolve(image, ones(k,k)/(k*k))
-
-# Gaussian
-kernel = gaussian_kernel(k, sigma)
-out = convolve(image, kernel)   # or separable 1D passes
-
-# Bilateral
-for each pixel p:
-    for q in kxk neighborhood:
-        w = spatial_weight(p,q,sigma_space) * range_weight(I[p], I[q], sigma_color)
-    out[p] = weighted_sum / weight_sum
-\end{lstlisting}
-
-\subsection{Tone/Brightness}
-\begin{lstlisting}[style=pycode]
-# Gamma (LUT)
-lut[i] = round(((i/255.0)**(1.0/gamma))*255)
-out = lut[image]
-
-# Dodge
 denom = 255 - strength*image
 out = clip((image*255) / max(denom, 1))
 \end{lstlisting}
+\textbf{Implementation note} Convert to BGR \texttt{uint8}, clamp strength \(s\), compute in float with denominator floor for stability, then clip and cast to \texttt{uint8}.
+
+\textbf{Experiment -- Dodge}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge3.jpg} \\
+\scriptsize $s=0.01$ & \scriptsize $s=0.5$ & \scriptsize $s=0.90$ \\
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge1graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge2graph.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodge3graph.jpg}
+\end{tabular}
+\end{center}
+
+\textbf{Use} stylized highlight brightening and sketch-like effects.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{xotiena00reportimages/dodgesample1.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodgesample2.jpg} &
+\img[width=0.31\textwidth]{xotiena00reportimages/dodgesample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} more aggressive than gamma; non-spatial (no blur spread).
+\textbf{Cost note} Per-pixel asymptotic cost is \(O(1)\) for direct pixel arithmetic.
+
+\subsection{Creative Glow Comparison}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Filter} & \textbf{Visual Effect} & \textbf{Best Use} & \textbf{Cost} \\
+\midrule
+Bloom & Strong highlight halo/spread & Dramatic bright sources & Medium \\
+Orton effect & Soft dreamy glow + lower micro-contrast & Portrait stylization & Medium \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Tone / Brightness Comparison}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Filter} & \textbf{Visual Effect} & \textbf{Best Use} & \textbf{Risk} \\
+\midrule
+Gamma & Controlled global tone remapping & Midtone correction & Can flatten contrast if overused \\
+Dodge & Aggressive highlight boost & Stylized brightening & Highlight clipping/saturation \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \section{Conclusion}
-The two groups serve different goals. Mean, Gaussian, and Bilateral are neighborhood-based
-denoisers with a quality-speed trade-off where bilateral gives best edge preservation at the
-highest cost. Gamma and Dodge are point-wise tone operators: gamma is controlled global tone
-correction, while dodge is an aggressive highlight boost. For real-time systems, LUT-based
-gamma/dodge are cheapest; for denoising quality, choose bilateral when computational budget allows,
-otherwise use Gaussian as the standard compromise.
+The two groups serve different goals. Bloom and Orton provide glow-style stylization. Gamma and Dodge remain point-wise tone
+operators: gamma for controlled global tone correction and dodge for stronger highlight emphasis.
+For runtime-sensitive use, Gamma/Dodge are lightweight; Bloom and Orton are costlier
+because they depend on blur kernels, but provide stronger cinematic look changes.
 
 \end{document}

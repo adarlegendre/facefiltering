@@ -44,6 +44,10 @@ _WN = "Wiener deconvolution"
 _DG = "Dodge"
 _SW = "Swirl"
 _BL = "Bloom"
+_OR = "Orton effect"
+_VG = "Vignette"
+_AG = "Aura glow"
+_FR = "Fresnel glow"
 _PO = "Posterize"
 _CH = "Crosshatch threshold"
 _ZM = "Zoom"
@@ -192,6 +196,38 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
         "# 3) Add glow back to original image\n"
         "out = clip_u8(bgr + intensity * glow)"
     ),
+    _OR: (
+        "# 1) Blur image for soft glow layer\n"
+        "blur = convolve_bgr(bgr, gaussian_kernel(k, sigma))\n"
+        "# 2) Screen-blend blurred and original layers\n"
+        "screen = 255 - ((255-bgr)*(255-blur)/255)\n"
+        "# 3) Mix with original by effect strength\n"
+        "out = (1-strength)*bgr + strength*screen"
+    ),
+    _VG: (
+        "# 1) Build radial mask from image center\n"
+        "radial = exp(-r^2 / (2*radius^2))\n"
+        "# 2) Convert to darkening mask via strength\n"
+        "mask = (1-strength) + strength*radial\n"
+        "# 3) Darken edges by multiplying each channel\n"
+        "out = bgr * mask"
+    ),
+    _AG: (
+        "# 1) Estimate edge strength map from image gradients\n"
+        "edge = gradient_magnitude(gray)\n"
+        "# 2) Blur edge map to create aura spread\n"
+        "glow = gaussian_blur(edge, sigma)\n"
+        "# 3) Add scaled glow on top of image\n"
+        "out = clip_u8(bgr + intensity * glow)"
+    ),
+    _FR: (
+        "# 1) Build radial rim map from center distance\n"
+        "rim = normalize(radius)^power\n"
+        "# 2) Smooth rim map for soft glow transition\n"
+        "rim = gaussian_blur(rim)\n"
+        "# 3) Add scaled rim glow to image\n"
+        "out = clip_u8(bgr + intensity * rim)"
+    ),
     _PO: (
         "# 1) Map intensities to a small number of discrete bins\n"
         "q = round((I/255) * (levels-1)) / (levels-1)\n"
@@ -263,7 +299,14 @@ def _with_code(md: str, filter_name: str) -> str:
     snippet = _HOW_IT_WORKS_CODE.get(filter_name)
     if not snippet:
         return md
-    return md + f"\n\n### Core computation\n```python\n{snippet}\n```"
+    return (
+        md
+        + "\n\n"
+        + "<details>\n"
+        + "<summary><strong>Core computation</strong></summary>\n\n"
+        + f"```python\n{snippet}\n```\n"
+        + "</details>"
+    )
 
 
 def _logo_html(height_px: int = 68) -> str:
@@ -314,14 +357,17 @@ def _gallery_caption(items: list[str], start: int, page_size: int) -> str:
     return f"Showing {s + 1}-{e} of {total}"
 
 _CUSTOM_CSS = """
-.gradio-container { max-width: 1100px !important; margin: auto !important; }
+.gradio-container { max-width: 980px !important; margin: auto !important; padding-top: 0.25rem !important; }
 footer { display: none !important; }
-.compact-params .wrap { gap: 0.35rem !important; }
-.compact-params label { font-size: 0.82rem !important; }
+.compact-params .wrap { gap: 0.22rem !important; }
+.compact-params label { font-size: 0.80rem !important; }
 .subtle { opacity: 0.75; font-size: 0.9rem !important; }
-.ff-title { text-align: center; margin: 0.1rem 0 0.25rem 0; }
-.ff-gallery { min-height: 86px !important; }
+.ff-title { text-align: center; margin: 0.05rem 0 0.15rem 0; }
+.ff-gallery { min-height: 72px !important; }
 .ff-gallery img { object-fit: cover !important; }
+.gradio-container .block { padding: 0.45rem 0.55rem !important; }
+.gradio-container .form { gap: 0.3rem !important; }
+.gradio-container .prose p, .gradio-container .prose h3 { margin-top: 0.35rem !important; margin-bottom: 0.35rem !important; }
 
 /* Theme toggle (client-side). Default: dark. */
 :root{
@@ -408,6 +454,14 @@ def _param_row_updates(filter_name: str):
         gr.update(visible=filter_name == _BL),
         gr.update(visible=filter_name == _BL),
         gr.update(visible=filter_name == _BL),
+        gr.update(visible=filter_name == _OR),
+        gr.update(visible=filter_name == _OR),
+        gr.update(visible=filter_name == _VG),
+        gr.update(visible=filter_name == _VG),
+        gr.update(visible=filter_name == _AG),
+        gr.update(visible=filter_name == _AG),
+        gr.update(visible=filter_name == _FR),
+        gr.update(visible=filter_name == _FR),
         gr.update(visible=filter_name == _PO),
         gr.update(visible=filter_name == _CH),
         gr.update(visible=filter_name == _CH),
@@ -569,15 +623,19 @@ def _pick_patch(gray_u8: np.ndarray, k: int) -> np.ndarray:
 
 
 def _render_before_after(a: np.ndarray, b: np.ndarray, w_each: int = 180, h: int = 220) -> np.ndarray:
-    """Side-by-side small grayscale images in one RGB canvas."""
+    """Side-by-side small grayscale images with labels above (no overlay)."""
     a = cv2.resize(a, (w_each, h), interpolation=cv2.INTER_NEAREST)
     b = cv2.resize(b, (w_each, h), interpolation=cv2.INTER_NEAREST)
     a_rgb = cv2.cvtColor(a, cv2.COLOR_GRAY2RGB)
     b_rgb = cv2.cvtColor(b, cv2.COLOR_GRAY2RGB)
-    out = np.concatenate([a_rgb, b_rgb], axis=1)
-    cv2.putText(out, "before", (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-    cv2.putText(out, "after", (w_each + 8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-    return out
+    body = np.concatenate([a_rgb, b_rgb], axis=1)
+
+    header_h = 30
+    header = np.full((header_h, body.shape[1], 3), 245, dtype=np.uint8)
+    cv2.putText(header, "before", (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2, cv2.LINE_AA)
+    cv2.putText(header, "after", (w_each + 8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2, cv2.LINE_AA)
+
+    return np.concatenate([header, body], axis=0)
 
 
 def build_theory(
@@ -612,6 +670,14 @@ def build_theory(
     bloom_thresh: int,
     bloom_sigma: float,
     bloom_intensity: float,
+    orton_sigma: float,
+    orton_strength: float,
+    vignette_strength: float,
+    vignette_radius: float,
+    aura_sigma: float,
+    aura_intensity: float,
+    fresnel_power: float,
+    fresnel_intensity: float,
     poster_levels: int,
     hatch_levels: int,
     hatch_step: int,
@@ -996,6 +1062,126 @@ def build_theory(
             viz2 = _render_hist_with_vline(gray, t)
         return _with_code(md, filter_name), viz1, viz2
 
+    if filter_name == _OR:
+        s = float(max(orton_sigma, 1e-6))
+        a = float(max(0.0, min(1.0, orton_strength)))
+        md = (
+            "### Orton effect\n"
+            "Soft glow via blur + screen blend:\n\n"
+            "$$B = G_{\\sigma} * I,\\quad S = 255 - \\frac{(255-I)(255-B)}{255},\\quad I'=(1-\\alpha)I+\\alpha S$$\n\n"
+            f"Current **sigma={s:.2f}**, **strength={a:.2f}**."
+        )
+        k = max(3, int(2 * round(3 * s) + 1) | 1)
+        g1 = cv2.getGaussianKernel(k, s, ktype=cv2.CV_64F)
+        viz1 = _render_heatmap(g1 @ g1.T, size=220)
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR).astype(np.float64)
+            blur = cv2.GaussianBlur(bgr, (k, k), s)
+            screen = 255.0 - ((255.0 - bgr) * (255.0 - blur) / 255.0)
+            mixed = np.clip((1.0 - a) * bgr + a * screen, 0, 255).astype(np.uint8)
+            gray0 = cv2.cvtColor(np.clip(bgr, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
+            gray1 = cv2.cvtColor(mixed, cv2.COLOR_BGR2GRAY)
+            viz2 = _render_before_after(_pick_patch(gray0, 31), _pick_patch(gray1, 31))
+        return _with_code(md, filter_name), viz1, viz2
+
+    if filter_name == _VG:
+        a = float(max(0.0, min(1.0, vignette_strength)))
+        rr = float(max(vignette_radius, 1e-6))
+        md = (
+            "### Vignette\n"
+            "Radial edge darkening centered in the image:\n\n"
+            "$$M(r)=(1-\\alpha)+\\alpha\\,e^{-r^2/(2\\sigma_r^2)},\\quad I'=I\\cdot M$$\n\n"
+            f"Current **strength={a:.2f}**, **radius={rr:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+        cy = cx = (size - 1) * 0.5
+        xn = (xx - cx) / max(cx, 1.0)
+        yn = (yy - cy) / max(cy, 1.0)
+        r2 = xn * xn + yn * yn
+        radial = np.exp(-r2 / (2.0 * rr * rr))
+        mask = (1.0 - a) + a * radial
+        viz1 = _render_heatmap(mask, size=220)
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR).astype(np.float64)
+            h, w = bgr.shape[:2]
+            y2, x2 = np.mgrid[0:h, 0:w].astype(np.float64)
+            cy2 = (h - 1) * 0.5
+            cx2 = (w - 1) * 0.5
+            xn2 = (x2 - cx2) / max(cx2, 1.0)
+            yn2 = (y2 - cy2) / max(cy2, 1.0)
+            r22 = xn2 * xn2 + yn2 * yn2
+            mask2 = (1.0 - a) + a * np.exp(-r22 / (2.0 * rr * rr))
+            out = np.clip(bgr * mask2[:, :, None], 0, 255).astype(np.uint8)
+            gray0 = cv2.cvtColor(np.clip(bgr, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
+            gray1 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+            viz2 = _render_before_after(_pick_patch(gray0, 31), _pick_patch(gray1, 31))
+        return _with_code(md, filter_name), viz1, viz2
+
+    if filter_name == _AG:
+        s = float(max(aura_sigma, 1e-6))
+        a = float(max(0.0, aura_intensity))
+        md = (
+            "### Aura glow\n"
+            "Edge-focused glow by gradient magnitude and Gaussian spread:\n\n"
+            "$$E=\\|\\nabla I\\|,\\quad G=\\mathrm{Blur}(E),\\quad I'=I+\\alpha G$$\n\n"
+            f"Current **sigma={s:.2f}**, **intensity={a:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+        cx = cy = (size - 1) * 0.5
+        r2 = ((xx - cx) ** 2 + (yy - cy) ** 2)
+        d0 = max(s * 18.0, 1.0)
+        aura_mask = np.exp(-r2 / (2.0 * d0 * d0))
+        viz1 = _render_heatmap(aura_mask, size=220)
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR).astype(np.float64)
+            gray = cv2.cvtColor(np.clip(bgr, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float64)
+            gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            mag = np.sqrt(gx * gx + gy * gy)
+            mag = mag / (mag.max() + 1e-12)
+            k = max(3, int(2 * round(3 * s) + 1) | 1)
+            glow = cv2.GaussianBlur((mag * 255.0).astype(np.uint8), (k, k), s).astype(np.float64) / 255.0
+            out = np.clip(bgr + a * 255.0 * glow[:, :, None], 0, 255).astype(np.uint8)
+            viz2 = cv2.cvtColor((glow * 255.0).astype(np.uint8), cv2.COLOR_GRAY2RGB)
+            gray0 = cv2.cvtColor(np.clip(bgr, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
+            gray1 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+            if viz2 is None:
+                viz2 = _render_before_after(_pick_patch(gray0, 31), _pick_patch(gray1, 31))
+        return _with_code(md, filter_name), viz1, viz2
+
+    if filter_name == _FR:
+        p = float(max(fresnel_power, 1e-6))
+        a = float(max(0.0, fresnel_intensity))
+        md = (
+            "### Fresnel glow\n"
+            "Rim-like glow using radial Fresnel-style weighting:\n\n"
+            "$$R=\\left(\\frac{r}{r_{max}}\\right)^p,\\quad I'=I+\\alpha R$$\n\n"
+            f"Current **power={p:.2f}**, **intensity={a:.2f}**."
+        )
+        size = 128
+        yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+        cx = cy = (size - 1) * 0.5
+        rr = np.sqrt(((xx - cx) / max(cx, 1.0)) ** 2 + ((yy - cy) / max(cy, 1.0)) ** 2)
+        rr = np.clip(rr / (rr.max() + 1e-12), 0.0, 1.0)
+        rim = np.power(rr, p)
+        viz1 = _render_heatmap(rim, size=220)
+        if image is not None and isinstance(image, np.ndarray) and image.ndim >= 2:
+            bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR).astype(np.float64)
+            h, w = bgr.shape[:2]
+            y2, x2 = np.mgrid[0:h, 0:w].astype(np.float64)
+            cx2 = (w - 1) * 0.5
+            cy2 = (h - 1) * 0.5
+            rr2 = np.sqrt(((x2 - cx2) / max(cx2, 1.0)) ** 2 + ((y2 - cy2) / max(cy2, 1.0)) ** 2)
+            rr2 = np.clip(rr2 / (rr2.max() + 1e-12), 0.0, 1.0)
+            rim2 = np.power(rr2, p)
+            rim2 = cv2.GaussianBlur(rim2.astype(np.float64), (0, 0), 1.0)
+            rim2 = rim2 / (rim2.max() + 1e-12)
+            out = np.clip(bgr + a * 255.0 * rim2[:, :, None], 0, 255).astype(np.uint8)
+            viz2 = cv2.cvtColor((rim2 * 255.0).astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        return _with_code(md, filter_name), viz1, viz2
+
     if filter_name == _PO:
         lv = int(poster_levels)
         md = (
@@ -1156,6 +1342,14 @@ def run_filter(
     bloom_thresh: int,
     bloom_sigma: float,
     bloom_intensity: float,
+    orton_sigma: float,
+    orton_strength: float,
+    vignette_strength: float,
+    vignette_radius: float,
+    aura_sigma: float,
+    aura_intensity: float,
+    fresnel_power: float,
+    fresnel_intensity: float,
     poster_levels: int,
     hatch_levels: int,
     hatch_step: int,
@@ -1203,6 +1397,14 @@ def run_filter(
             "bloom_thresh": int(bloom_thresh),
             "bloom_sigma": float(bloom_sigma),
             "bloom_intensity": float(bloom_intensity),
+            "orton_sigma": float(orton_sigma),
+            "orton_strength": float(orton_strength),
+            "vignette_strength": float(vignette_strength),
+            "vignette_radius": float(vignette_radius),
+            "aura_sigma": float(aura_sigma),
+            "aura_intensity": float(aura_intensity),
+            "fresnel_power": float(fresnel_power),
+            "fresnel_intensity": float(fresnel_intensity),
             "poster_levels": int(poster_levels),
             "hatch_levels": int(hatch_levels),
             "hatch_step": int(hatch_step),
@@ -1323,6 +1525,14 @@ def main():
                         bloom_thresh = gr.Slider(0, 255, value=180, step=1, label="Threshold (Bloom)", show_label=True)
                         bloom_sigma = gr.Slider(0.1, 15.0, value=2.5, step=0.1, label="Sigma (Bloom glow)", show_label=True)
                         bloom_intensity = gr.Slider(0.0, 3.0, value=0.7, step=0.05, label="Intensity (Bloom)", show_label=True)
+                        orton_sigma = gr.Slider(0.1, 20.0, value=2.0, step=0.1, label="Sigma (Orton effect)", show_label=True)
+                        orton_strength = gr.Slider(0.0, 1.0, value=0.6, step=0.05, label="Strength (Orton effect)", show_label=True)
+                        vignette_strength = gr.Slider(0.0, 1.0, value=0.6, step=0.05, label="Strength (Vignette)", show_label=True)
+                        vignette_radius = gr.Slider(0.2, 2.0, value=0.9, step=0.05, label="Radius (Vignette)", show_label=True)
+                        aura_sigma = gr.Slider(0.1, 20.0, value=3.0, step=0.1, label="Sigma (Aura glow)", show_label=True)
+                        aura_intensity = gr.Slider(0.0, 3.0, value=0.8, step=0.05, label="Intensity (Aura glow)", show_label=True)
+                        fresnel_power = gr.Slider(0.2, 8.0, value=2.0, step=0.1, label="Power (Fresnel glow)", show_label=True)
+                        fresnel_intensity = gr.Slider(0.0, 3.0, value=0.7, step=0.05, label="Intensity (Fresnel glow)", show_label=True)
                         poster_levels = gr.Slider(2, 32, value=8, step=1, label="Levels (Posterize)", show_label=True)
                         hatch_levels = gr.Slider(2, 8, value=4, step=1, label="Tone levels (Crosshatch)", show_label=True)
                         hatch_step = gr.Slider(3, 24, value=8, step=1, label="Line spacing (Crosshatch)", show_label=True)
@@ -1339,33 +1549,40 @@ def main():
                 gallery_start = gr.State(0)
                 gallery_all = gr.State(all_gallery_items)
                 gallery_page_items = gr.State(_gallery_slice(all_gallery_items, 0, gallery_page_size))
-                gallery_caption = gr.Markdown(
-                    _gallery_caption(all_gallery_items, 0, gallery_page_size),
-                    elem_classes=["subtle"],
-                )
+                with gr.Accordion("Image selection", open=True):
+                    gallery_caption = gr.Markdown(
+                        _gallery_caption(all_gallery_items, 0, gallery_page_size),
+                        elem_classes=["subtle"],
+                    )
+                    with gr.Row():
+                        gallery_prev_btn = gr.Button("◀", size="sm")
+                        gallery_next_btn = gr.Button("▶", size="sm")
+                    sample_gallery = gr.Gallery(
+                        value=_gallery_slice(all_gallery_items, 0, gallery_page_size),
+                        label="Sample gallery (click to load)",
+                        show_label=False,
+                        columns=6,
+                        rows=2,
+                        height=170,
+                        object_fit="cover",
+                        elem_classes=["ff-gallery"],
+                        allow_preview=False,
+                    )
                 with gr.Row():
-                    gallery_prev_btn = gr.Button("◀", size="sm")
-                    gallery_next_btn = gr.Button("▶", size="sm")
-                sample_gallery = gr.Gallery(
-                    value=_gallery_slice(all_gallery_items, 0, gallery_page_size),
-                    label="Sample gallery (click to load)",
-                    show_label=False,
-                    columns=6,
-                    rows=1,
-                    height=95,
-                    object_fit="cover",
-                    elem_classes=["ff-gallery"],
-                    allow_preview=False,
-                )
+                    gr.Markdown("**Input (upload your own)**")
+                    gr.Markdown("**Output**")
                 with gr.Row():
-                    inp = gr.Image(type="numpy", label="Input (or upload your own)", height=300)
-                    out = gr.Image(type="numpy", label="Output", height=300)
+                    inp = gr.Image(type="numpy", show_label=False, height=250)
+                    out = gr.Image(type="numpy", show_label=False, height=250)
 
                 gr.Markdown("### How it works")
                 theory_md = gr.Markdown()
                 with gr.Row():
-                    theory_viz1 = gr.Image(type="numpy", label="Kernel / Mask / Curve", height=170)
-                    theory_viz2 = gr.Image(type="numpy", label="Extra", height=170)
+                    gr.Markdown("**Kernel / Mask / Curve**")
+                    gr.Markdown("**Extra**")
+                with gr.Row():
+                    theory_viz1 = gr.Image(type="numpy", show_label=False, height=140)
+                    theory_viz2 = gr.Image(type="numpy", show_label=False, height=140)
 
         sliders = (
             ksize,
@@ -1397,6 +1614,14 @@ def main():
             bloom_thresh,
             bloom_sigma,
             bloom_intensity,
+            orton_sigma,
+            orton_strength,
+            vignette_strength,
+            vignette_radius,
+            aura_sigma,
+            aura_intensity,
+            fresnel_power,
+            fresnel_intensity,
             poster_levels,
             hatch_levels,
             hatch_step,
@@ -1510,6 +1735,14 @@ def main():
             bloom_thresh,
             bloom_sigma,
             bloom_intensity,
+            orton_sigma,
+            orton_strength,
+            vignette_strength,
+            vignette_radius,
+            aura_sigma,
+            aura_intensity,
+            fresnel_power,
+            fresnel_intensity,
             poster_levels,
             hatch_levels,
             hatch_step,

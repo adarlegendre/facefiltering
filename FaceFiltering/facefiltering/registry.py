@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Tuple
 import numpy as np
 
 from facefiltering.filters import background_removal as f_bgrem
+from facefiltering.filters import aura_glow as f_aura
 from facefiltering.filters import binary_threshold as f_bin
 from facefiltering.filters import bilateral as f_bilateral
 from facefiltering.filters import bloom as f_bloom
@@ -18,6 +19,7 @@ from facefiltering.filters import dilate as f_dilate
 from facefiltering.filters import diffuse as f_diffuse
 from facefiltering.filters import dodge as f_dodge
 from facefiltering.filters import erode as f_erode
+from facefiltering.filters import fresnel_glow as f_fresnel
 from facefiltering.filters import gamma as f_gamma
 from facefiltering.filters import gaussian_blur as f_gauss
 from facefiltering.filters import highpass_fourier as f_hp
@@ -27,10 +29,12 @@ from facefiltering.filters import laplacian as f_lap
 from facefiltering.filters import lens_distortion as f_ld
 from facefiltering.filters import median as f_median
 from facefiltering.filters import posterize as f_poster
+from facefiltering.filters import orton_effect as f_orton
 from facefiltering.filters import relief_emboss as f_emb
 from facefiltering.filters import sobel as f_sobel
 from facefiltering.filters import swirl as f_swirl
 from facefiltering.filters import unsharp as f_unsharp
+from facefiltering.filters import vignette as f_vignette
 from facefiltering.filters import wiener as f_wiener
 from facefiltering.filters import zoom as f_zoom
 from facefiltering.validate import ensure_bgr_u8
@@ -53,6 +57,9 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
     (f_ch.DISPLAY_NAME, f_ch.apply),
     (f_diffuse.DISPLAY_NAME, f_diffuse.apply),
     (f_hue.DISPLAY_NAME, f_hue.apply),
+    (f_orton.DISPLAY_NAME, f_orton.apply),
+    (f_aura.DISPLAY_NAME, f_aura.apply),
+    (f_fresnel.DISPLAY_NAME, f_fresnel.apply),
     (f_hp.DISPLAY_NAME, f_hp.apply),
     (f_median.DISPLAY_NAME, f_median.apply),
     (f_dilate.DISPLAY_NAME, f_dilate.apply),
@@ -61,6 +68,7 @@ _FILTER_ORDER: List[Tuple[str, Callable[..., np.ndarray]]] = [
     (f_zoom.DISPLAY_NAME, f_zoom.apply),
     (f_ld.DISPLAY_NAME, f_ld.apply),
     (f_bloom.DISPLAY_NAME, f_bloom.apply),
+    (f_vignette.DISPLAY_NAME, f_vignette.apply),
     (f_wiener.DISPLAY_NAME, f_wiener.apply),
 ]
 
@@ -90,10 +98,14 @@ FILTER_METHODOLOGIES: Dict[str, str] = {
     f_poster.DISPLAY_NAME: "Point-wise intensity mapping",
     f_ch.DISPLAY_NAME: "Point-wise intensity mapping",
     f_hue.DISPLAY_NAME: "Point-wise intensity mapping",
+    f_orton.DISPLAY_NAME: "Spatial neighborhood",
+    f_aura.DISPLAY_NAME: "Spatial neighborhood",
+    f_fresnel.DISPLAY_NAME: "Point-wise intensity mapping",
     f_zoom.DISPLAY_NAME: "Geometric warping",
     f_ld.DISPLAY_NAME: "Geometric warping",
     f_emb.DISPLAY_NAME: "Spatial neighborhood",
     f_diffuse.DISPLAY_NAME: "Spatial neighborhood",
+    f_vignette.DISPLAY_NAME: "Point-wise intensity mapping",
 }
 
 METHODOLOGY_DESCRIPTIONS: Dict[str, str] = {
@@ -142,12 +154,16 @@ FILTER_FUNCTIONS: Dict[str, str] = {
     f_poster.DISPLAY_NAME: "Creative stylization",
     f_ch.DISPLAY_NAME: "Creative stylization",
     f_hue.DISPLAY_NAME: "Creative stylization",
+    f_orton.DISPLAY_NAME: "Creative stylization",
+    f_aura.DISPLAY_NAME: "Creative stylization",
+    f_fresnel.DISPLAY_NAME: "Creative stylization",
     f_swirl.DISPLAY_NAME: "Creative stylization",
     f_zoom.DISPLAY_NAME: "Creative stylization",
     f_ld.DISPLAY_NAME: "Creative stylization",
     f_bloom.DISPLAY_NAME: "Creative stylization",
     f_emb.DISPLAY_NAME: "Creative stylization",
     f_diffuse.DISPLAY_NAME: "Creative stylization",
+    f_vignette.DISPLAY_NAME: "Creative stylization",
 }
 
 FUNCTION_NAMES: List[str] = [
@@ -210,7 +226,8 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
     erode_ksize, erode_iter, dodge_strength, swirl_strength, swirl_radius,
     bloom_thresh, bloom_sigma, bloom_intensity, poster_levels, hatch_levels,
     hatch_step, zoom_factor, lens_strength, emboss_strength, diffuse_radius,
-    diffuse_mix, hue_degrees
+    diffuse_mix, hue_degrees, orton_sigma, orton_strength, vignette_strength,
+    vignette_radius, aura_sigma, aura_intensity, fresnel_power, fresnel_intensity
     """
     fn = _REGISTRY.get(name)
     if fn is None:
@@ -309,5 +326,29 @@ def apply_filter(name: str, bgr: np.ndarray, **kwargs) -> np.ndarray:
         )
     if name == f_hue.DISPLAY_NAME:
         return fn(img, degrees=float(kwargs.get("hue_degrees", 45.0)))
+    if name == f_orton.DISPLAY_NAME:
+        return fn(
+            img,
+            sigma=float(kwargs.get("orton_sigma", 2.0)),
+            strength=float(kwargs.get("orton_strength", 0.6)),
+        )
+    if name == f_vignette.DISPLAY_NAME:
+        return fn(
+            img,
+            strength=float(kwargs.get("vignette_strength", 0.6)),
+            radius_ratio=float(kwargs.get("vignette_radius", 0.9)),
+        )
+    if name == f_aura.DISPLAY_NAME:
+        return fn(
+            img,
+            sigma=float(kwargs.get("aura_sigma", 3.0)),
+            intensity=float(kwargs.get("aura_intensity", 0.8)),
+        )
+    if name == f_fresnel.DISPLAY_NAME:
+        return fn(
+            img,
+            power=float(kwargs.get("fresnel_power", 2.0)),
+            intensity=float(kwargs.get("fresnel_intensity", 0.7)),
+        )
 
     raise RuntimeError("Registry dispatch out of sync.")
