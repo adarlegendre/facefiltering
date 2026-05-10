@@ -398,6 +398,17 @@ def run_filter(
         raise gr.Error(f"Filter failed: {e}") from e
 
 
+def _merge_no_proxy_localhost() -> None:
+    """Gradio checks 127.0.0.1 after bind; global HTTP(S)_PROXY without NO_PROXY breaks that on VPS/systemd."""
+    for key in ("NO_PROXY", "no_proxy"):
+        cur = os.environ.get(key, "")
+        parts = [p.strip() for p in cur.split(",") if p.strip()]
+        for item in ("127.0.0.1", "localhost", "::1"):
+            if item not in parts:
+                parts.append(item)
+        os.environ[key] = ",".join(parts)
+
+
 def main():
     print(f"[FaceFiltering] Running app from: {Path(__file__).resolve()}")
     print(f"[FaceFiltering] Filters in UI (fixed): {list(_FILTER_CHOICES)}")
@@ -590,8 +601,16 @@ def main():
             s.change(fn=build_theory, inputs=inputs, outputs=theory_outputs)
         demo.load(fn=build_theory, inputs=inputs, outputs=theory_outputs)
 
+    _merge_no_proxy_localhost()
     host = os.environ.get("FF_HOST", os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"))
-    demo.launch(server_name=host, server_port=7860, theme=theme, css=_CUSTOM_CSS)
+    port = int(os.environ.get("FF_PORT", os.environ.get("GRADIO_SERVER_PORT", "7860")))
+    demo.launch(
+        server_name=host,
+        server_port=port,
+        theme=theme,
+        css=_CUSTOM_CSS,
+        inbrowser=False,
+    )
 
 
 if __name__ == "__main__":
