@@ -604,12 +604,14 @@ def main():
     _merge_no_proxy_localhost()
     host = os.environ.get("FF_HOST", os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"))
     port = int(os.environ.get("FF_PORT", os.environ.get("GRADIO_SERVER_PORT", "7860")))
+    # Skip Gradio's post-launch localhost HEAD probe (breaks behind proxy / some VPS).
     demo.launch(
         server_name=host,
         server_port=port,
         theme=theme,
         css=_CUSTOM_CSS,
         inbrowser=False,
+        _frontend=False,
     )
 
 
