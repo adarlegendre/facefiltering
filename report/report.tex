@@ -1,0 +1,324 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\graphicspath{{assets/}}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\lstdefinestyle{pycode}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!40!black},
+  stringstyle=\color{orange!50!black},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  aboveskip=4pt,
+  belowskip=4pt
+}
+\newcommand{\img}[2][]{\includegraphics[#1]{\detokenize{#2}}}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+\setlength{\abovedisplayskip}{6pt}
+\setlength{\belowdisplayskip}{6pt}
+\setlength{\abovedisplayshortskip}{4pt}
+\setlength{\belowdisplayshortskip}{4pt}
+\setlength{\textfloatsep}{8pt}
+\renewcommand{\arraystretch}{0.98}
+\setlist{nosep}
+
+\begin{document}
+\begin{center}
+{\LARGE\bfseries Creative Glow \& Tone/Brightness Filters\par}
+\vspace{2pt}
+{\large xotiena00\par}
+\vspace{2pt}
+{May 9, 2026\par}
+\end{center}
+\vspace{6pt}
+
+\section{Implementation and submission}\label{sec:impl}
+The full source code is submitted with the project (repository: \texttt{facefiltering}). Filter cores are in \texttt{FaceFiltering/facefiltering/filters/}: \texttt{bloom.py}, \texttt{orton\_effect.py}, \texttt{gamma.py}, \texttt{dodge.py}. Shared utilities: \texttt{facefiltering/ops.py} (Gaussian kernel, convolution), \texttt{facefiltering/validate.py} (BGR \texttt{uint8} checks, clamps), \texttt{facefiltering/registry.py} (\texttt{apply\_filter}). The Gradio UI is \texttt{FaceFiltering/app.py}; batch/CLI use \texttt{FaceFiltering/main.py}. Annex~\ref{sec:annex} lists the correspondence between the equations in this document and these files.
+
+\textbf{Complexity convention.} Costs are stated \emph{per operation} and \emph{for the whole frame}. Let $W\times H$ be the image size, $N_{\mathrm{sp}}=WH$ spatial pixels, $C=3$ BGR channels, and $N_{\mathrm{pix}}=N_{\mathrm{sp}}C$ scalar samples. Point-wise filters (LUT gamma, dodge arithmetic) do $\Theta(1)$ work per scalar sample, hence $\Theta(N_{\mathrm{pix}})$ for the full image. Gaussian blur with a naive $k\times k$ convolution uses $\Theta(k^2)$ multiply-adds per spatial pixel per channel, hence $\Theta(N_{\mathrm{pix}}k^2)$ overall; an optimized separable Gaussian would be $\Theta(N_{\mathrm{pix}}k)$. Saying ``\(O(1)\) per pixel'' for gamma is shorthand for ``per sample''; total work is linear in the number of samples, i.e.\ \(\Theta(N_{\mathrm{pix}})\), not independent of image size.
+
+\section{Classification and Comparison}
+\begin{center}
+\begin{tabular}{@{}lllll@{}}
+\toprule
+\textbf{Filter} & \textbf{Group} & \textbf{Methodology} & \textbf{Linear?} & \textbf{Edge Preservation} \\
+\midrule
+Bloom & Creative Glow & Bright-mask + blur + additive blend & Hybrid & Medium \\
+Orton effect & Creative Glow & Blur + screen blend + mix & Hybrid & Medium \\
+Gamma & Tone/Brightness & Point-wise power-law mapping (LUT) & No & N/A \\
+Dodge & Tone/Brightness & Point-wise nonlinear brightening curve & No & N/A \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Theory and Application}
+
+\subsection{Bloom}
+\textbf{Core model}
+\[
+M(x)=\mathbf{1}_{I_g(x)\ge T},\quad B=I\odot M,\quad G=G_{\sigma}*B,\quad I'=I+\alpha G
+\]
+\textbf{Notation} \(T\): threshold, \(\sigma\): blur spread, \(\alpha\): glow strength, \(I'\): output.
+
+\textbf{Pixel-level transformation}
+\[
+I'_c(x,y)=I_c(x,y)+\alpha\sum_{i=-r}^{r}\sum_{j=-r}^{r}G_{\sigma}(i,j)\,B_c(x+i,y+j)
+\]
+Only bright pixels feed the glow layer; high \(T\) can suppress bloom even with high \(\alpha\).
+
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+bright = image * (gray >= T)
+glow = convolve(bright, gaussian_kernel(k, sigma))
+out = clip(image + alpha * glow)
+\end{lstlisting}
+\textbf{Implementation detail (steps)} 
+(1) Input BGR \(I\) as \texttt{uint8}; compute grayscale \(I_g\) from BGR for the mask only (fixed linear luminance weights matching the code). 
+(2) Binary mask \(M=\mathbf{1}_{I_g\ge T}\); bright layer \(B_c=I_c\cdot M\) per channel (float).
+(3) Convolution \(G=B*G_\sigma\) with discrete normalized Gaussian stencil of size \(k\times k\), \(\sum G_\sigma=1\).
+(4) Output \(I'=\mathrm{clip}_{[0,255]}(I+\alpha G)\) in float then round to \texttt{uint8}.
+
+\textbf{Experiment -- Bloom}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{bloom1.jpg} &
+\img[width=0.31\textwidth]{bloom2.jpg} &
+\img[width=0.31\textwidth]{bloom3.jpg} \\
+\scriptsize $T=24,\ \alpha=0.05,\ \sigma=0.5$ &
+\scriptsize $T=21,\ \alpha=0.65,\ \sigma=1.2$ &
+\scriptsize $T=144,\ \alpha=1.8,\ \sigma=11.3$ \\
+\img[width=0.31\textwidth]{bloom1graph.jpg} &
+\img[width=0.31\textwidth]{bloom2graph.jpg} &
+\img[width=0.31\textwidth]{bloom3graph.jpg}
+\end{tabular}
+\end{center}
+
+\textbf{Use} cinematic highlight glow and light-source emphasis.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{bloomsample1.jpg} &
+\img[width=0.31\textwidth]{bloomsample2.jpg} &
+\img[width=0.31\textwidth]{bloomsample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} stronger spatial glow than gamma/dodge.
+
+\textbf{Cost} Naive Gaussian: \(\Theta(k^2)\) multiply-adds per spatial sample per channel; full image \(\Theta(N_{\mathrm{pix}} k^2)\). Addition \(\Theta(N_{\mathrm{pix}})\). Separable Gaussian (if used) would reduce blur to \(\Theta(N_{\mathrm{pix}} k)\).
+
+\subsection{Orton Effect}
+\textbf{Core model}
+\[
+S = 255 - \frac{(255-I)(255-B)}{255},\quad B=G_{\sigma}*I,\quad I'=(1-\alpha)I+\alpha S
+\]
+\textbf{Notation} \(B\): blurred image, \(S\): screen blend, \(\sigma\): blur spread, \(\alpha\): mix strength.
+
+\textbf{Pixel-level transformation}
+\[
+\begin{aligned}
+B_c(x,y)&=\sum_{i=-r}^{r}\sum_{j=-r}^{r}G_{\sigma}(i,j)\,I_c(x+i,y+j),\\
+S_c(x,y)&=255-\frac{(255-I_c(x,y))(255-B_c(x,y))}{255},\\
+I'_c(x,y)&=(1-\alpha)I_c(x,y)+\alpha S_c(x,y).
+\end{aligned}
+\]
+
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+blur = convolve(image, gaussian_kernel(k, sigma))
+screen = 255 - ((255-image)*(255-blur)/255)
+out = clip((1-alpha)*image + alpha*screen)
+\end{lstlisting}
+\textbf{Implementation detail (steps)} 
+(1) Blur full-color image: \(B=I*G_\sigma\) per channel in float. 
+(2) Screen blend per channel: \(S_c=255-(255-I_c)(255-B_c)/255\) (8-bit screen in \([0,255]\)). 
+(3) Convex mix: \(I'=(1-\alpha)I+\alpha S\), clip and cast to \texttt{uint8}.
+
+\textbf{Experiment -- Orton}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{orton1.jpg} &
+\img[width=0.31\textwidth]{orton2.jpg} &
+\img[width=0.31\textwidth]{orton3.jpg} \\
+\scriptsize $\alpha=0.15,\ \sigma=0.1$ &
+\scriptsize $\alpha=0.45,\ \sigma=8.5$ &
+\scriptsize $\alpha=1.0,\ \sigma=19.1$ \\
+\img[width=0.31\textwidth]{orton1graph.jpg} &
+\img[width=0.31\textwidth]{orton2graph.jpg} &
+\img[width=0.31\textwidth]{orton3graph3.jpg}
+\end{tabular}
+\end{center}
+
+\textbf{Use} soft-focus portrait look with reduced micro-contrast.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{ortonsample1.jpg} &
+\img[width=0.31\textwidth]{ortonsample2.jpg} &
+\img[width=0.31\textwidth]{ortonsample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} gentler and more diffuse than bloom.
+
+\textbf{Cost} Same blur dominance as Bloom: \(\Theta(N_{\mathrm{pix}} k^2)\) for naive \(k\times k\) Gaussian; screen and mix are \(\Theta(N_{\mathrm{pix}})\).
+
+\subsection{Gamma Filter}
+\textbf{Core model}
+\[
+V_{\text{out}} = A\,V_{\text{in}}^{\gamma},\qquad
+I' = 255\left(\frac{I}{255}\right)^{1/\gamma}
+\]
+\textbf{Notation} \(\gamma\): tone-curve exponent, \(A\): scale (usually 1), \(I\in[0,255]\): 8-bit input.
+\textbf{Why \(0..255\)} 8-bit \texttt{uint8} images have 256 levels; divide by 255 to normalize to \([0,1]\), then multiply by 255 to return.
+
+\textbf{Pixel-level transformation}
+\[
+I'_{c}(x,y)=255\left(\frac{I_{c}(x,y)}{255}\right)^{1/\gamma}
+\]
+\(\gamma<1\): brighter midtones, \(\gamma>1\): darker midtones.
+
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+lut[i] = round(((i/255.0)**(1.0/gamma))*255)
+out = lut[image]
+\end{lstlisting}
+\textbf{Implementation detail (steps)} 
+(1) Clamp \(\gamma\) to a safe interval; precompute LUT \texttt{lut} of length 256: \(\texttt{lut}[i]=\mathrm{round}(255\cdot(i/255)^{1/\gamma})\). 
+(2) Apply \texttt{lut} by indexing: each channel \(I'_c(x,y)=\texttt{lut}[I_c(x,y)]\) (vectorized as \texttt{lut[bgr]} in code). 
+(3) Output remains BGR \texttt{uint8}.
+
+\textbf{Colour space} The same power law is applied \textbf{independently to each RGB/BGR channel}. This is simple and fast but can shift apparent hue/saturation because chroma is not held fixed. A common alternative is to convert to a luminance-based representation (e.g.\ linear RGB \(\to\) \(Y\)), apply the tone curve to \(Y\) only, and map back, which better preserves perceived color.
+
+\textbf{Experiment -- Gamma}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{gamma1.jpg} &
+\img[width=0.31\textwidth]{gamma2.jpg} &
+\img[width=0.31\textwidth]{gamma3.jpg} \\
+\scriptsize $\gamma=0.2$ & \scriptsize $\gamma=1.0$ & \scriptsize $\gamma=1.95$ \\
+\img[width=0.31\textwidth]{gamma1graph.jpg} &
+\img[width=0.31\textwidth]{gamma2graph.jpg} &
+\img[width=0.31\textwidth]{gamma3graph.jpg}
+\end{tabular}
+\end{center}
+
+\textbf{Use} controlled global tone and midtone correction.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{gammasample1.jpg} &
+\img[width=0.31\textwidth]{gammasample2.jpg} &
+\img[width=0.31\textwidth]{gammasample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} smoother and less aggressive than dodge.
+
+\textbf{Cost} \(\Theta(1)\) per scalar lookup; full image \(\Theta(N_{\mathrm{pix}})\). Building the LUT is \(\Theta(1)\) (256 entries).
+
+\subsection{Dodge Filter}
+\textbf{Core model}
+\[
+I' \approx \frac{255\,I}{255-sI}
+\]
+\textbf{Notation} \(s\): dodge strength, \(I\): input intensity, \(I'\): output intensity.
+
+\textbf{Pixel-level transformation}
+\[
+I'_{c}(x,y)=\mathrm{clip}\!\left(\frac{255\,I_{c}(x,y)}{\max(255-s\,I_{c}(x,y),1)}\right)
+\]
+Higher \(s\) strongly boosts highlights and may clip to white.
+
+\textbf{Algorithm (implementation)}
+\begin{lstlisting}[style=pycode]
+denom = 255 - strength*image
+out = clip((image*255) / max(denom, 1))
+\end{lstlisting}
+\textbf{Implementation detail (steps)} 
+(1) Clamp strength \(s\) to a safe range; work in float \([0,255]\). 
+(2) Denominator \(d_c=\max(255-s\cdot I_c,\,1)\) per channel per sample (floor at 1 avoids division by zero). 
+(3) \(I'_c=\mathrm{clip}(255\cdot I_c/d_c)\), then \texttt{uint8}.
+
+\textbf{Experiment -- Dodge}
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{dodge1.jpg} &
+\img[width=0.31\textwidth]{dodge2.jpg} &
+\img[width=0.31\textwidth]{dodge3.jpg} \\
+\scriptsize $s=0.01$ & \scriptsize $s=0.5$ & \scriptsize $s=0.90$ \\
+\img[width=0.31\textwidth]{dodge1graph.jpg} &
+\img[width=0.31\textwidth]{dodge2graph.jpg} &
+\img[width=0.31\textwidth]{dodge3graph.jpg}
+\end{tabular}
+\end{center}
+
+\textbf{Use} stylized highlight brightening and sketch-like effects.  
+\begin{center}
+\begin{tabular}{ccc}
+\img[width=0.31\textwidth]{dodgesample1.jpg} &
+\img[width=0.31\textwidth]{dodgesample2.jpg} &
+\img[width=0.31\textwidth]{dodgesample3.jpg}
+\end{tabular}
+\end{center}
+\textbf{Compare} more aggressive than gamma; non-spatial (no blur spread).
+
+\textbf{Cost} \(\Theta(1)\) arithmetic per scalar sample; \(\Theta(N_{\mathrm{pix}})\) for the frame.
+
+\subsection{Creative Glow Comparison}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Filter} & \textbf{Visual Effect} & \textbf{Best Use} & \textbf{Cost} \\
+\midrule
+Bloom & Strong highlight halo/spread & Dramatic bright sources & Medium \\
+Orton effect & Soft dreamy glow + lower micro-contrast & Portrait stylization & Medium \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Tone / Brightness Comparison}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Filter} & \textbf{Visual Effect} & \textbf{Best Use} & \textbf{Risk} \\
+\midrule
+Gamma & Controlled global tone remapping & Midtone correction & Can flatten contrast if overused \\
+Dodge & Aggressive highlight boost & Stylized brightening & Highlight clipping/saturation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Annex: equation--code map}\label{sec:annex}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Concept in this PDF} & \textbf{Implementation file / symbol} \\
+\midrule
+Bloom (\(M,B,G,G_\sigma,\alpha,\mathrm{clip}\)) & \texttt{facefiltering/filters/bloom.py}, \texttt{apply(...)} \\
+Orton blur + screen + mix & \texttt{facefiltering/filters/orton\_effect.py}, \texttt{apply(...)} \\
+Gamma LUT \(i\mapsto \mathrm{round}(255(i/255)^{1/\gamma})\) & \texttt{facefiltering/filters/gamma.py}, \texttt{apply(...)} \\
+Dodge \(\mathrm{clip}(255I/\max(255-sI,1))\) & \texttt{facefiltering/filters/dodge.py}, \texttt{apply(...)} \\
+Gaussian stencil + convolution & \texttt{facefiltering/ops.py} \\
+Dispatch \texttt{apply\_filter(name, bgr, **kw)} & \texttt{facefiltering/registry.py} \\
+\bottomrule
+\end{tabular}
+
+\section{Conclusion}
+The two groups serve different goals. Bloom and Orton provide glow-style stylization. Gamma and Dodge remain point-wise tone
+operators: gamma for controlled global tone correction and dodge for stronger highlight emphasis.
+Gamma and Dodge scale as \(\Theta(N_{\mathrm{pix}})\) over the image; Bloom and Orton add spatial blur at \(\Theta(N_{\mathrm{pix}}k^2)\) per channel for a naive \(k\times k\) kernel (Section~\ref{sec:impl}). The submitted source files in Annex~\ref{sec:annex} match the equations and listings above.
+
+\end{document}
