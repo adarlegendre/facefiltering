@@ -34,6 +34,34 @@ _DG = "Dodge"
 
 _LOGO_PATH = Path(__file__).resolve().parent / "facefiltering" / "logo" / "logo.png"
 _GALLERY_DIR = Path(__file__).resolve().parent / "faces"
+_FILTERS_DIR = Path(__file__).resolve().parent / "facefiltering" / "filters"
+
+_FILTER_SOURCE_FILES: dict[str, str] = {
+    _BL: "bloom.py",
+    _OR: "orton_effect.py",
+    _GM: "gamma.py",
+    _DG: "dodge.py",
+}
+
+_filter_source_cache: dict[str, str] = {}
+
+
+def _filter_source_for_ui(filter_name: str) -> tuple[str, str]:
+    """Return (relative_path_for_label, source_text) for the filter implementation file."""
+    fname = _FILTER_SOURCE_FILES.get(filter_name, "")
+    if not fname:
+        return "", ""
+    rel = f"facefiltering/filters/{fname}"
+    if filter_name in _filter_source_cache:
+        return rel, _filter_source_cache[filter_name]
+    path = _FILTERS_DIR / fname
+    try:
+        text = path.read_text(encoding="utf-8").rstrip() + "\n"
+    except OSError:
+        text = f"# Unable to read source: {path}\n"
+    _filter_source_cache[filter_name] = text
+    return f"facefiltering/filters/{fname}", text
+
 
 _HOW_IT_WORKS_CODE: dict[str, str] = {
     _BL: (
@@ -59,16 +87,21 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
 
 def _with_code(md: str, filter_name: str) -> str:
     snippet = _HOW_IT_WORKS_CODE.get(filter_name)
-    if not snippet:
+    rel_path, src = _filter_source_for_ui(filter_name)
+    if not snippet and not src.strip():
         return md
-    return (
-        md
-        + "\n\n"
-        + "<details>\n"
-        + "<summary><strong>Core computation</strong></summary>\n\n"
-        + f"```python\n{snippet}\n```\n"
-        + "</details>"
+    body = (
+        "<details>\n"
+        "<summary><strong>Core computation</strong></summary>\n\n"
     )
+    if snippet:
+        body += "**Algorithm (pseudocode)**\n\n"
+        body += f"```python\n{snippet}\n```\n\n"
+    if rel_path and src.strip():
+        body += f"**Program (`{rel_path}`)**\n\n"
+        body += f"```python\n{src}\n```\n"
+    body += "</details>"
+    return md + "\n\n" + body
 
 
 def _logo_html(height_px: int = 68) -> str:
