@@ -85,6 +85,20 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
 }
 
 
+_RUNTIME_BIG_O: dict[str, str] = {
+    _BL: (
+        "**Complexity** — **O(n·k²)** dominates: **k×k** Gaussian convolution on the glow layer, **3** color planes "
+        "(see `convolve_bgr`). **n = H·W** pixels; **k** = kernel side (odd, scales with σ). Mask / add are **O(n)**."
+    ),
+    _OR: (
+        "**Complexity** — **O(n·k²)** dominates: one **k×k** Gaussian blur on the full image × **3** channels; "
+        "screen blend and mix are **O(n)**. **n = H·W**, **k** = kernel side."
+    ),
+    _GM: "**Complexity** — **O(n)** with **n = H·W·3** samples (LUT lookup per channel); building the 256-entry table is **O(1)**.",
+    _DG: "**Complexity** — **O(n)** pointwise map with **n = H·W·3** channel samples.",
+}
+
+
 _NOTATION_HTML: dict[str, str] = {
     _BL: (
         "<details>\n"
@@ -149,6 +163,9 @@ def _with_code(md: str, filter_name: str) -> str:
     if snippet:
         body += "**Algorithm (pseudocode)**\n\n"
         body += f"```python\n{snippet}\n```\n\n"
+        cx = _RUNTIME_BIG_O.get(filter_name)
+        if cx:
+            body += cx + "\n\n"
     if rel_path and src.strip():
         body += f"**Program (`{rel_path}`)**\n\n"
         body += f"```python\n{src}\n```\n"
