@@ -85,6 +85,58 @@ _HOW_IT_WORKS_CODE: dict[str, str] = {
 }
 
 
+_NOTATION_HTML: dict[str, str] = {
+    _BL: (
+        "<details>\n"
+        '<summary><strong>Notation</strong></summary>\n\n'
+        "<ul>\n"
+        "<li><strong>I</strong> — input color image (each channel 0–255).</li>\n"
+        "<li><strong>I′</strong> — output image after bloom.</li>\n"
+        "<li><strong>T</strong> — grayscale threshold; pixels brighter than this feed the glow.</li>\n"
+        "<li><strong>α</strong> — bloom intensity (how strongly glow is added back).</li>\n"
+        "<li><strong>Blur</strong> — Gaussian blur; spread controlled by <strong>σ</strong> (sigma).</li>\n"
+        "<li><strong>1<sub>I≥T</sub></strong> — mask (1 where luminance ≥ <strong>T</strong>, else 0).</li>\n"
+        "</ul>\n\n"
+        "</details>"
+    ),
+    _OR: (
+        "<details>\n"
+        '<summary><strong>Notation</strong></summary>\n\n'
+        "<ul>\n"
+        "<li><strong>I</strong> — input color image (each channel 0–255).</li>\n"
+        "<li><strong>I′</strong> — output after mixing.</li>\n"
+        "<li><strong>B</strong> — blurred copy of <strong>I</strong> (Gaussian, blur scale <strong>σ</strong>).</li>\n"
+        "<li><strong>G<sub>σ</sub> * I</strong> — shorthand for that Gaussian blur.</li>\n"
+        "<li><strong>S</strong> — “screen” blend of sharp <strong>I</strong> and blurred <strong>B</strong>.</li>\n"
+        "<li><strong>α</strong> — strength from 0 to 1: 0 keeps <strong>I</strong>, 1 pushes toward full screen blend.</li>\n"
+        "</ul>\n\n"
+        "</details>"
+    ),
+    _GM: (
+        "<details>\n"
+        '<summary><strong>Notation</strong></summary>\n\n'
+        "<ul>\n"
+        "<li><strong>I</strong> — input intensity per channel (0–255).</li>\n"
+        "<li><strong>I′</strong> — output after gamma correction.</li>\n"
+        "<li><strong>γ</strong> — gamma; exponent 1/γ shapes mid-tones (<strong>γ = 1</strong> leaves the image unchanged).</li>\n"
+        "</ul>\n\n"
+        "</details>"
+    ),
+    _DG: (
+        "<details>\n"
+        '<summary><strong>Notation</strong></summary>\n\n'
+        "<ul>\n"
+        "<li><strong>I</strong> — input intensity per channel (0–255).</li>\n"
+        "<li><strong>I′</strong> — output after dodge curve.</li>\n"
+        "<li><strong>s</strong> — dodge strength (how aggressive brightening is).</li>\n"
+        "<li><strong>max(255 − sI, 1)</strong> — denominator kept ≥ 1 so division stays finite.</li>\n"
+        "<li><strong>clip</strong> — clamp values into valid 0–255 byte range.</li>\n"
+        "</ul>\n\n"
+        "</details>"
+    ),
+}
+
+
 def _with_code(md: str, filter_name: str) -> str:
     snippet = _HOW_IT_WORKS_CODE.get(filter_name)
     rel_path, src = _filter_source_for_ui(filter_name)
@@ -222,7 +274,47 @@ def _render_heatmap(mat: np.ndarray, size: int = 220) -> np.ndarray:
     img = (x01 * 255.0).astype(np.uint8)
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_NEAREST)
     img = cv2.applyColorMap(img, cv2.COLORMAP_VIRIDIS)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cap = "Gaussian kernel (2D, center = peak)"
+    ts = cv2.getTextSize(cap, font, 0.42, 1)[0]
+    x0 = max(4, (size - ts[0]) // 2)
+    cv2.putText(img, cap, (x0, size - 6), font, 0.42, (40, 40, 40), 1, cv2.LINE_AA)
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
+def _annotate_plot_axes(
+    canvas_bgr: np.ndarray,
+    *,
+    x_label: str,
+    y_label: str,
+    left: int = 30,
+    top: int = 10,
+    right_pad: int = 10,
+    bottom_pad: int = 30,
+    x_lo_tick: str = "0",
+    x_hi_tick: str = "255",
+    y_top_tick: str | None = "255",
+) -> None:
+    """Draw short axis captions for cv2-rendered plots (image is BGR for OpenCV)."""
+    h, w = canvas_bgr.shape[:2]
+    right = w - right_pad
+    bottom = h - bottom_pad
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    color = (55, 55, 55)
+    scale = 0.45
+    thickness = 1
+
+    tw, th = cv2.getTextSize(x_label, font, scale, thickness)[0]
+    cx = max(left, min(right - tw, (left + right) // 2 - tw // 2))
+    cv2.putText(canvas_bgr, x_label, (cx, h - 7), font, scale, color, thickness, cv2.LINE_AA)
+
+    y_mid = (top + bottom) // 2 + th // 2
+    cv2.putText(canvas_bgr, y_label, (6, y_mid), font, scale, color, thickness, cv2.LINE_AA)
+
+    cv2.putText(canvas_bgr, x_lo_tick, (left - 2, bottom + 12), font, 0.4, color, 1, cv2.LINE_AA)
+    cv2.putText(canvas_bgr, x_hi_tick, (right - 26, bottom + 12), font, 0.4, color, 1, cv2.LINE_AA)
+    if y_top_tick:
+        cv2.putText(canvas_bgr, y_top_tick, (left - 14, top + 12), font, 0.4, color, 1, cv2.LINE_AA)
 
 
 def _render_curve(gamma: float, w: int = 360, h: int = 220) -> np.ndarray:
@@ -239,6 +331,7 @@ def _render_curve(gamma: float, w: int = 360, h: int = 220) -> np.ndarray:
         py = int((h - 30) - (y / 255.0) * (h - 40))
         pts.append((px, py))
     cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (20, 70, 200), 2)
+    _annotate_plot_axes(canvas, x_label="Input level (0–255)", y_label="Output level")
     return canvas
 
 
@@ -251,6 +344,12 @@ def _render_hist(gray_u8: np.ndarray, w: int = 360, h: int = 220) -> np.ndarray:
         x = int(30 + (i / 255.0) * (w - 40))
         y = int((h - 30) - hist[i] * (h - 40))
         cv2.line(canvas, (x, h - 30), (x, y), (40, 40, 40), 1)
+    _annotate_plot_axes(
+        canvas,
+        x_label="Gray level (0–255)",
+        y_label="Count (norm.)",
+        y_top_tick="1",
+    )
     return canvas
 
 
@@ -259,7 +358,7 @@ def _render_hist_with_vline(gray_u8: np.ndarray, v: int, w: int = 360, h: int = 
     v = int(max(0, min(255, v)))
     x = int(30 + (v / 255.0) * (w - 40))
     cv2.line(img, (x, 10), (x, h - 30), (220, 50, 50), 2)
-    cv2.putText(img, f"T={v}", (max(32, x - 20), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 50, 50), 2, cv2.LINE_AA)
+    cv2.putText(img, f"T={v}", (max(32, x - 20), 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 50, 50), 2, cv2.LINE_AA)
     return img
 
 
@@ -283,8 +382,8 @@ def _render_before_after(a: np.ndarray, b: np.ndarray, w_each: int = 180, h: int
     body = np.concatenate([a_rgb, b_rgb], axis=1)
     header_h = 30
     header = np.full((header_h, body.shape[1], 3), 245, dtype=np.uint8)
-    cv2.putText(header, "before", (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2, cv2.LINE_AA)
-    cv2.putText(header, "after", (w_each + 8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2, cv2.LINE_AA)
+    cv2.putText(header, "before (patch)", (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 2, cv2.LINE_AA)
+    cv2.putText(header, "after (patch)", (w_each + 8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 2, cv2.LINE_AA)
     return np.concatenate([header, body], axis=0)
 
 
@@ -322,6 +421,8 @@ def build_theory(
             "### Bloom\n"
             "Glow from bright regions:\n\n"
             "$$I' = I + \\alpha\\,\\mathrm{Blur}(I\\cdot\\mathbf{1}_{I\\ge T})$$\n\n"
+            + _NOTATION_HTML[_BL]
+            + "\n\n"
             f"Current **threshold={t}**, **sigma={s:.2f}**, **intensity={a:.2f}**."
         )
         k = max(3, int(2 * round(3 * s) + 1) | 1)
@@ -340,6 +441,8 @@ def build_theory(
             "### Orton effect\n"
             "Soft glow via blur + screen blend:\n\n"
             "$$B = G_{\\sigma} * I,\\quad S = 255 - \\frac{(255-I)(255-B)}{255},\\quad I'=(1-\\alpha)I+\\alpha S$$\n\n"
+            + _NOTATION_HTML[_OR]
+            + "\n\n"
             f"Current **sigma={s:.2f}**, **strength={a:.2f}**."
         )
         k = max(3, int(2 * round(3 * s) + 1) | 1)
@@ -360,6 +463,8 @@ def build_theory(
         md = (
             "### Gamma (power-law)\n"
             "$$I' = 255\\cdot (I/255)^{1/\\gamma}$$\n\n"
+            + _NOTATION_HTML[_GM]
+            + "\n\n"
             f"Current **γ = {g:.2f}**."
         )
         viz1 = _render_curve(g)
@@ -371,6 +476,8 @@ def build_theory(
             "### Dodge\n"
             "Highlight brightening (stable mapping):\n\n"
             "$$I' = \\mathrm{clip}\\!\\left(\\frac{255\\,I}{\\max(255 - sI,\\,1)}\\right)$$\n\n"
+            + _NOTATION_HTML[_DG]
+            + "\n\n"
             f"Current **strength = {s:.2f}**."
         )
         xs = np.arange(256, dtype=np.float64)
@@ -385,6 +492,7 @@ def build_theory(
             py = int((h - 30) - (y / 255.0) * (h - 40))
             pts.append((px, py))
         cv2.polylines(canvas, [np.array(pts, dtype=np.int32)], False, (180, 80, 20), 2)
+        _annotate_plot_axes(canvas, x_label="Input level (0–255)", y_label="Output level")
         viz1 = canvas
         return _with_code(md, filter_name), viz1, None
 
